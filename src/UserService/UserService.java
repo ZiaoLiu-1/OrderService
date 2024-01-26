@@ -1,9 +1,9 @@
-
 import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.Authenticator.Result;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
-
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.io.BufferedReader;
@@ -24,14 +24,54 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 
 
-public class Main {
+public class UserService {
+
+    // Config class to hold the configuration details
+    static class ServiceConfig {
+        int port;
+        String ip;
+
+        public ServiceConfig(int port, String ip) {
+            this.port = port;
+            this.ip = ip;
+        }
+
+        // Getters
+        public int getPort() {
+            return port;
+        }
+
+        public String getIp() {
+            return ip;
+        }
+    }
+
+    // Method to read and parse the config.json file for a specific service
+    private static ServiceConfig readConfig(String filePath, String serviceName) {
+        try {
+            String content = new String(Files.readAllBytes(Paths.get(filePath)));
+            JSONObject jsonObject = new JSONObject(content);
+            JSONObject serviceConfig = jsonObject.getJSONObject(serviceName);
+            int port = serviceConfig.getInt("port");
+            String ip = serviceConfig.getString("ip");
+            return new ServiceConfig(port, ip);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
 
     public static void main(String[] args) throws IOException {
         // Initialize SQLite Database
+        String path = System.getProperty("user.dir");
+        ServiceConfig userServiceConfig = readConfig(path + "/config.json", "UserService");
+        if (userServiceConfig == null) {
+            System.err.println("Failed to read config for UserService. Using default settings.");
+            userServiceConfig = new ServiceConfig(14001, "127.0.0.1"); // default settings
+        }
+        int port = userServiceConfig.getPort();
         initializeDatabase();
-
-        int port = 8081;
-        HttpServer server = HttpServer.create(new InetSocketAddress(port), 0);
+        HttpServer server = HttpServer.create(new InetSocketAddress(userServiceConfig.getIp(), port), 0);
         server.setExecutor(Executors.newFixedThreadPool(20)); // Adjust the pool size as needed
         server.createContext("/user", new TestHandler());
         server.setExecutor(null); // creates a default executor

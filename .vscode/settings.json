@@ -3,6 +3,8 @@
 ],
 "java.project.sourcePaths": [
     "lib",
-    ""
+    "src/ProductService",
+    "src/UserService",
+    "src/OrderService",
 ]
 }
