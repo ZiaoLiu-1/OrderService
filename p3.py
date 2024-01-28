@@ -17,6 +17,10 @@ def make_post_request(url, data):
 if __name__ == "__main__":
   url = 'http://127.0.0.1:14000/order'
 
-  data = {"command": "place order","user_id": 3, "product_id": 3, "quantity": 10} 
-
+  data = {"command": "place order",
+    "user_id": 1,
+    "product_id": 2,
+    "quantity": 3
+  
+}
   make_post_request(url, data)

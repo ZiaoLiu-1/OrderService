@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -68,6 +69,7 @@ public class OrderService {
     }
 
     private static ServiceConfig readConfig(String filePath) {
+
         try {
             String content = new String(Files.readAllBytes(Paths.get(filePath)));
             JSONObject json = new JSONObject(content);
@@ -113,6 +115,9 @@ public class OrderService {
         HttpServer server = HttpServer.create(new InetSocketAddress(orderServiceConfig.getIp(2), port), 0);
         server.setExecutor(Executors.newFixedThreadPool(20)); 
         server.createContext("/order", new OrderHandler(orderServiceConfig));
+        server.createContext("/user", new UserHandler(orderServiceConfig));
+        server.createContext("/product", new ProductHandler(orderServiceConfig));
+    
         server.setExecutor(null);
         server.start();
 
@@ -188,6 +193,78 @@ public class OrderService {
             }   
         }   
     }
+    static class UserHandler implements HttpHandler {
+        private ServiceConfig config;
+    
+        public UserHandler(ServiceConfig config) {
+            this.config = config;
+        }
+    
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            // Construct the URL for the User service
+            URL url = new URL("http://" + config.getIp(0) + ":" + config.getPort(0) + exchange.getRequestURI().getPath());
+            System.out.println(url);
+            forwardRequest(exchange, url);
+        }
+    }
+
+    
+    static class ProductHandler implements HttpHandler {
+        private ServiceConfig config;
+    
+        public ProductHandler(ServiceConfig config) {
+            this.config = config;
+        }
+    
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            // Construct the URL for the Product service
+            URL url = new URL("http://" + config.getIp(1) + ":" + config.getPort(1) + exchange.getRequestURI().getPath());
+            System.out.println(url);
+            forwardRequest(exchange, url);
+        }
+    }
+
+    private static void forwardRequest(HttpExchange exchange, URL url) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        connection.setRequestMethod(exchange.getRequestMethod());
+    
+        // Forward all headers from the incoming request
+        exchange.getRequestHeaders().forEach((key, value) -> connection.setRequestProperty(key, String.join(",", value)));
+    
+        // Only set doOutput for methods that have a body
+        if ("POST".equals(exchange.getRequestMethod()) || "PUT".equals(exchange.getRequestMethod())) {
+            connection.setDoOutput(true);
+            try (OutputStream os = connection.getOutputStream()) {
+                byte[] input = getRequestBody(exchange).getBytes(StandardCharsets.UTF_8);
+                os.write(input, 0, input.length);
+            }
+        }
+    
+        int responseCode = connection.getResponseCode();
+        InputStream inputStream = responseCode < HttpURLConnection.HTTP_BAD_REQUEST ? connection.getInputStream() : connection.getErrorStream();
+    
+        // Forward response headers and body
+        exchange.getResponseHeaders().clear();
+        connection.getHeaderFields().forEach((key, values) -> {
+            if (key != null && values != null) {
+                values.forEach(value -> exchange.getResponseHeaders().add(key, value));
+            }
+        });
+    
+        exchange.sendResponseHeaders(responseCode, 0);
+        try (OutputStream os = exchange.getResponseBody()) {
+            byte[] buffer = new byte[1024];
+            int count;
+            while ((count = inputStream.read(buffer)) != -1) {
+                os.write(buffer, 0, count);
+            }
+        } finally {
+            connection.disconnect();
+        }
+    }
+    
     
 
         private static String getRequestBody(HttpExchange exchange) throws IOException {

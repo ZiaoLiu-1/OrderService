@@ -73,10 +73,9 @@ public class UserService {
         initializeDatabase();
         HttpServer server = HttpServer.create(new InetSocketAddress(userServiceConfig.getIp(), port), 0);
         server.setExecutor(Executors.newFixedThreadPool(20)); // Adjust the pool size as needed
-        server.createContext("/user", new UserHandler());
+        server.createContext("/user", new UserHandler(server));
         server.setExecutor(null); // creates a default executor
         server.start();
-
         System.out.println("Server started on port " + port);
     }
 
@@ -116,6 +115,10 @@ public class UserService {
     }
 
     static class UserHandler implements HttpHandler {
+        HttpServer server;
+        UserHandler(HttpServer server){
+            this.server = server;
+        }
         @Override
             public void handle(HttpExchange exchange) throws IOException {
                 if ("POST".equals(exchange.getRequestMethod())) {
