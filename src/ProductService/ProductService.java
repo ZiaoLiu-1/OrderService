@@ -23,7 +23,6 @@ import java.sql.ResultSet;
 
 
 
-
 public class ProductService {
     static class ServiceConfig {
         int port;
@@ -61,14 +60,14 @@ public class ProductService {
     public static void main(String[] args) throws IOException {
         // Initialize SQLite Database
         String path = System.getProperty("user.dir");
-        ServiceConfig userServiceConfig = readConfig(path + "/config.json", "ProductService");
-        if (userServiceConfig == null) {
-            System.err.println("Failed to read config for UserService. Using default settings.");
-            userServiceConfig = new ServiceConfig(14000, "127.0.0.1"); // default settings
+        ServiceConfig productServiceConfig = readConfig(path + "/config.json", "ProductService");
+        if (productServiceConfig == null) {
+            System.err.println("Failed to read config for ProductService. Using default settings.");
+            productServiceConfig = new ServiceConfig(14000, "127.0.0.1"); // default settings
         }
-        int port = userServiceConfig.getPort();
+        int port = productServiceConfig.getPort();
         initializeDatabase();
-        HttpServer server = HttpServer.create(new InetSocketAddress(userServiceConfig.getIp(), port), 0);
+        HttpServer server = HttpServer.create(new InetSocketAddress(productServiceConfig.getIp(), port), 0);
         server.setExecutor(Executors.newFixedThreadPool(20)); 
         server.createContext("/product", new ProductHandler());
         server.setExecutor(null);
@@ -89,7 +88,8 @@ public class ProductService {
             // Create table if not exists
             String sql = "CREATE TABLE IF NOT EXISTS products (" +
                      "id INTEGER PRIMARY KEY, " +
-                     "productname TEXT NOT NULL, " +
+                     "name TEXT NOT NULL, " +
+                     "description TEXT NOT NULL" +
                      "price REAL NOT NULL, " +
                      "quantity INTEGER NOT NULL);";
     

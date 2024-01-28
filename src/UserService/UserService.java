@@ -73,7 +73,7 @@ public class UserService {
         initializeDatabase();
         HttpServer server = HttpServer.create(new InetSocketAddress(userServiceConfig.getIp(), port), 0);
         server.setExecutor(Executors.newFixedThreadPool(20)); // Adjust the pool size as needed
-        server.createContext("/user", new TestHandler());
+        server.createContext("/user", new UserHandler());
         server.setExecutor(null); // creates a default executor
         server.start();
 
@@ -114,7 +114,8 @@ public class UserService {
         String databasePath = userHome + "/Database/info.db"; // Use File.separator for better cross-platform support
         return "jdbc:sqlite:" + databasePath;
     }
-    static class TestHandler implements HttpHandler {
+
+    static class UserHandler implements HttpHandler {
         @Override
             public void handle(HttpExchange exchange) throws IOException {
                 if ("POST".equals(exchange.getRequestMethod())) {
