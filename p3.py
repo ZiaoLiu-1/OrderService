@@ -15,8 +15,8 @@ def make_post_request(url, data):
   except Exception as e:
     print(e)
 if __name__ == "__main__":
-  url = 'http://127.0.0.1:1401/user'
+  url = 'http://127.0.0.1:14000/order'
 
-  data = {"command": "create","id": 3, "username": "shuijiaoge", "email": "Hello@mail.com"} 
+  data = {"command": "place order","user_id": 3, "product_id": 3, "quantity": 10} 
 
   make_post_request(url, data)
