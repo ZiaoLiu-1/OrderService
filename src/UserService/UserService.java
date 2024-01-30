@@ -157,8 +157,8 @@ public class UserService {
                             deleteUser(exchange, json);
                             break;
                         default:
-                            // Handle unknown command
-                            break;
+                            sendResponse(exchange, "Invalid command", 400);
+                            return;
                     }
         
                     String response = "Command processed";
@@ -347,7 +347,7 @@ public class UserService {
             if (json.has("password")) {
                 if (needComma) sql.append(", ");
                 sql.append("password = ?");
-                params.add(json.getString("password")); // Hash the password
+                params.add(json.getString("password")); 
             }
             sql.append(" WHERE id = ?");
     
@@ -422,7 +422,7 @@ public class UserService {
         } catch (SQLException e) {
             System.err.println(e.getMessage());
             try {
-                sendResponse(exchange, "", 500);
+                sendResponse(exchange, "Internal Server Error", 500);
             } catch (IOException e1) {
                 e1.printStackTrace();
             } 

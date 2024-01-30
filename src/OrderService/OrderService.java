@@ -316,14 +316,14 @@ public class OrderService {
             // If the user or product don't exist
             if (!userExists || !productExists) {
                 sendResponse(exchange, "Invalid Request: User/Product ID does not exist.", 400);
-                createOrder(json, "Invalid Request");
+                createOrder(json, "Invalid Request", config);
                 return;
             }
     
             // If requested quantity exceeds available quantity
             if (availableQuantity < quantity) {
                 sendResponse(exchange, "Exceeded quantity limit.", 400);
-                createOrder(json, "Exceeded quantity limit");
+                createOrder(json, "Exceeded quantity limit", config);
                 return;
             }
     
@@ -331,13 +331,16 @@ public class OrderService {
     
             // Update product quantity
             boolean updateSuccess = updateProductQuantity(config.getIp(1), config.getPort(1), productId, newQuantity);
-            createOrder(json, "Success");
             if (!updateSuccess) {
                 sendResponse(exchange, "Failed to update product quantity. Command refused.", 400);
                 return;
             }
-            
-            sendResponse(exchange, "Order placed successfully.", 200);
+
+            // Create the order in the database and obtain the response JSON with order details
+            JSONObject orderResponse = createOrder(json, "Success", config);
+        
+            // Send the response back with the order details
+            sendResponse(exchange, orderResponse.toString(), 200); // OK status code
         } catch (Exception e) {
             System.err.println("Error placing order: " + e.getMessage());
             try {
@@ -348,48 +351,40 @@ public class OrderService {
         }
     }
     
-    private static void createOrder(JSONObject json, String status) {
+    private static JSONObject createOrder(JSONObject json, String status, ServiceConfig config) throws SQLException {
         String url = getDatabaseUrl();
+        JSONObject responseJson = new JSONObject();
     
-        // SQL statement to insert a new order
         String insertOrderSQL = "INSERT INTO orders (product_id, user_id, quantity, status) VALUES (?, ?, ?, ?)";
     
         try (Connection conn = DriverManager.getConnection(url);
              PreparedStatement pstmt = conn.prepareStatement(insertOrderSQL, Statement.RETURN_GENERATED_KEYS)) {
     
-            // Set values for the insert statement
             pstmt.setInt(1, json.getInt("product_id"));
             pstmt.setInt(2, json.getInt("user_id"));
             pstmt.setInt(3, json.getInt("quantity"));
-            pstmt.setString(4, status); // Assuming the order is successful at this point
-            System.out.println(pstmt);
-            // Execute the insert statement
+            pstmt.setString(4, status);
+            
             int affectedRows = pstmt.executeUpdate();
             if (affectedRows == 0) {
                 throw new SQLException("Creating order failed, no rows affected.");
             }
     
-            // Retrieve the generated order ID
             try (ResultSet generatedKeys = pstmt.getGeneratedKeys()) {
                 if (generatedKeys.next()) {
                     long orderId = generatedKeys.getLong(1);
-                    // Construct a JSON response with the order details
-                    JSONObject responseJson = new JSONObject();
                     responseJson.put("id", orderId);
                     responseJson.put("product_id", json.getInt("product_id"));
                     responseJson.put("user_id", json.getInt("user_id"));
                     responseJson.put("quantity", json.getInt("quantity"));
-                    responseJson.put("status", "Success");
+                    responseJson.put("status", status);
                 } else {
                     throw new SQLException("Creating order failed, no ID obtained.");
                 }
             }
-        } catch (SQLException e) {
-            System.err.println("SQLException: " + e.getMessage());
         }
+        return responseJson;
     }
-    
-
     
     
     private static boolean checkEntityExistence(String ip, int port, String endpoint, int entityId) throws IOException {

@@ -123,13 +123,13 @@ public class ProductService {
 
                 switch (command) {
                     case "create":
-                        createProduct(requestJson);
+                        createProduct(exchange, requestJson);
                         break;
                     case "update":
-                        updateProduct(requestJson);
+                        updateProduct(exchange, requestJson);
                         break;
                     case "delete":
-                        deleteProduct(requestJson);
+                        deleteProduct(exchange, requestJson);
                         break;
                     default:
                         sendResponse(exchange, "Invalid command", 400);
@@ -161,20 +161,22 @@ public class ProductService {
                 
                         if (rs.next()) {
                             // Assuming columns like name, email, etc. Adjust according to your schema
-                            String name = rs.getString("productname");
+                            String name = rs.getString("name");
                             int price = rs.getInt("price");
                             String quantity = rs.getString("quantity");
+                            String description = rs.getString("description");
 
                 
                             JSONObject respond = new JSONObject();
                             respond.put("id", id);
-                            respond.put("productname", name);
+                            respond.put("name", name);
+                            respond.put("description", description);
                             respond.put("price", price);
                             respond.put("quantity", quantity);
-                
+                            
                             sendResponse(exchange, respond.toString(), 200);
                         } else {
-                            // Handle case where no user is found
+                            // Handle case where no product is found
                             sendResponse(exchange, "Product not found", 404);
                         }
                     } catch (SQLException e) {
@@ -217,13 +219,21 @@ public class ProductService {
         }
     }
 
-    private static void createProduct(JSONObject json) {
+    private static void createProduct(HttpExchange exchange, JSONObject json) {
         String url = getDatabaseUrl();
     
-        // Check for required fields
-        if (!json.has("productname") || json.optString("productname").isEmpty() || 
-            !json.has("id")) {
-            System.err.println("Product name or ID is missing. Command refused.");
+        // Check for required fields and that quantity and price are not negative
+        if (!json.has("name") || json.optString("name").isEmpty() || 
+            !json.has("id") || 
+            !json.has("description") || json.optString("description").isEmpty() ||
+            !json.has("price") || json.optDouble("price", -1.0) < 0 ||
+            !json.has("quantity") || json.optInt("quantity", -1) < 0) {
+            System.err.println("Missing or invalid fields. Command refused.");
+            try {
+                sendResponse(exchange, "Bad Request", 400);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
             return;
         }
     
@@ -231,96 +241,184 @@ public class ProductService {
              PreparedStatement pstmtCheck = conn.prepareStatement(
                      "SELECT COUNT(*) FROM products WHERE id = ?");
              PreparedStatement pstmtInsert = conn.prepareStatement(
-                     "INSERT INTO products (id, productname, price, quantity) VALUES (?, ?, ?, ?)")) {
+                     "INSERT INTO products (id, name, description, price, quantity) VALUES (?, ?, ?, ?, ?)")) {
     
             // Check if ID already exists
             pstmtCheck.setInt(1, json.getInt("id"));
             ResultSet rs = pstmtCheck.executeQuery();
             if (rs.next() && rs.getInt(1) > 0) {
                 System.err.println("Product ID already exists. Command refused.");
+                sendResponse(exchange, "Product ID already exists", 409);
                 return;
             }
     
             // Insert the new product
             pstmtInsert.setInt(1, json.getInt("id"));
-            pstmtInsert.setString(2, json.getString("productname"));
-            pstmtInsert.setDouble(3, json.getDouble("price"));
-            pstmtInsert.setInt(4, json.getInt("quantity"));
+            pstmtInsert.setString(2, json.getString("name"));
+            pstmtInsert.setString(3, json.getString("description"));
+            pstmtInsert.setDouble(4, json.getDouble("price"));
+            pstmtInsert.setInt(5, json.getInt("quantity"));
             pstmtInsert.executeUpdate();
+
+            // Send the success response with the product details
+            JSONObject responseJson = new JSONObject();
+            responseJson.put("id", json.getInt("id"));
+            responseJson.put("name", json.getString("name"));
+            responseJson.put("description", json.getString("description"));
+            responseJson.put("price", json.getDouble("price"));
+            responseJson.put("quantity", json.getInt("quantity"));
+            
+            sendResponse(exchange, responseJson.toString(), 200); 
+
         } catch (SQLException e) {
             System.err.println(e.getMessage());
+            try {
+                sendResponse(exchange, "Internal Server Error", 500);
+            } catch (IOException e1) {
+                e1.printStackTrace();
+            }
+        } catch (IOException e) {
+            System.err.println("IOException occurred while sending response: " + e.getMessage());
         }
     }
     
 
 
 
-    private static void updateProduct(JSONObject json) {
+    private static void updateProduct(HttpExchange exchange, JSONObject json) {
         String url = getDatabaseUrl();
     
-        // Check for the product ID
+        // Check for the product ID, price, and quantity fields
         if (!json.has("id")) {
             System.err.println("Product ID is missing. Command refused.");
+            try {
+                sendResponse(exchange, "Missing product ID", 400);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
             return;
         }
-    
+
+        if (json.has("price") && json.optDouble("price", -1.0) < 0) {
+            System.err.println("Price cannot be negative. Command refused.");
+            try {
+                sendResponse(exchange, "Price cannot be negative", 400);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return;
+        }
+
+        if (json.has("quantity") && json.optInt("quantity", -1) < 0) {
+            System.err.println("Quantity cannot be negative. Command refused.");
+            try {
+                sendResponse(exchange, "Quantity cannot be negative", 400);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return;
+        }
+        
+   
         try (Connection conn = DriverManager.getConnection(url)) {
             StringBuilder sql = new StringBuilder("UPDATE products SET ");
+            List<Object> params = new ArrayList<>();
             boolean needComma = false;
     
-            if (json.has("productname")) {
-                sql.append("productname = ?");
+            // Dynamically build the SQL query based on the provided fields
+            if (json.has("name")) {
+                sql.append(needComma ? ", " : "").append("name = ?");
+                params.add(json.getString("name"));
+                needComma = true;
+            }
+            if (json.has("description")) {
+                sql.append(needComma ? ", " : "").append("description = ?");
+                params.add(json.getString("description"));
                 needComma = true;
             }
             if (json.has("price")) {
-                if (needComma) sql.append(", ");
-                sql.append("price = ?");
+                sql.append(needComma ? ", " : "").append("price = ?");
+                params.add(json.getDouble("price"));
                 needComma = true;
             }
             if (json.has("quantity")) {
-                if (needComma) sql.append(", ");
-                sql.append("quantity = ?");
+                sql.append(needComma ? ", " : "").append("quantity = ?");
+                params.add(json.getInt("quantity"));
             }
+    
             sql.append(" WHERE id = ?");
+            params.add(json.getInt("id"));
     
             try (PreparedStatement pstmtUpdate = conn.prepareStatement(sql.toString())) {
-                int paramIndex = 1;
-                if (json.has("productname")) {
-                    pstmtUpdate.setString(paramIndex++, json.getString("productname"));
+                for (int i = 0; i < params.size(); i++) {
+                    pstmtUpdate.setObject(i + 1, params.get(i));
                 }
-                if (json.has("price")) {
-                    pstmtUpdate.setDouble(paramIndex++, json.getDouble("price"));
-                }
-                if (json.has("quantity")) {
-                    pstmtUpdate.setInt(paramIndex++, json.getInt("quantity"));
-                }
-                pstmtUpdate.setInt(paramIndex, json.getInt("id"));
+                pstmtUpdate.setInt(params.size() + 1, json.getInt("id"));
     
                 int affectedRows = pstmtUpdate.executeUpdate();
-                if (affectedRows == 0) {
-                    System.err.println("Product ID does not exist. No update performed.");
+                if (affectedRows > 0) {
+                    try (PreparedStatement pstmtSelect = conn.prepareStatement("SELECT * FROM products WHERE id = ?")) {
+                        pstmtSelect.setInt(1, json.getInt("id"));
+                        ResultSet rs = pstmtSelect.executeQuery();
+                        if (rs.next()) {
+                            
+                            JSONObject responseJson = new JSONObject();
+                            responseJson.put("id", rs.getInt("id"));
+                            responseJson.put("name", rs.getString("name"));
+                            responseJson.put("description", rs.getString("description"));
+                            responseJson.put("price", rs.getDouble("price"));
+                            responseJson.put("quantity", rs.getInt("quantity"));
+
+                            sendResponse(exchange, responseJson.toString(), 200);
+                        } else {
+                            sendResponse(exchange, "Product not found after update", 500);
+                        }
+                    }
+                } else {
+                    sendResponse(exchange, "Product not found", 404);
                 }
             }
         } catch (SQLException e) {
             System.err.println(e.getMessage());
+            try {
+                sendResponse(exchange, "Internal Server Error", 500);
+            } catch (IOException e1) {
+                e1.printStackTrace();
+            }
+        } catch (IOException e) {
+            System.err.println("IOException occurred while sending response: " + e.getMessage());
         }
     }
     
 
-
-
-    private static void deleteProduct(JSONObject json) {
+    private static void deleteProduct(HttpExchange exchange, JSONObject json) {
         String url = getDatabaseUrl();
         try (Connection conn = DriverManager.getConnection(url);
              PreparedStatement pstmt = conn.prepareStatement(
-                     "DELETE FROM products WHERE id = ?")) {
+                     "DELETE FROM products WHERE id = ? AND name = ? AND price = ? AND quantity = ?")) {
             pstmt.setInt(1, json.getInt("id"));
+            pstmt.setString(2, json.getString("name"));
+            pstmt.setDouble(3, json.getDouble("price"));
+            pstmt.setInt(4, json.getInt("quantity"));
+            
             int affectedRows = pstmt.executeUpdate();
+            
             if (affectedRows == 0) {
-                System.err.println("Product ID does not exist. No delete performed.");
+                System.err.println("No product found or product could not be deleted.");
+                sendResponse(exchange, "", 404); // Not Found status code
+            } else {
+                sendResponse(exchange, "", 200); // OK status code for successful deletion
             }
+            
         } catch (SQLException e) {
             System.err.println(e.getMessage());
+            try {
+                sendResponse(exchange, "Internal Server Error", 500);
+            } catch (IOException e1) {
+                e1.printStackTrace();
+            } 
+        } catch (IOException e) {
+            System.err.println("IOException occurred while sending response: " + e.getMessage());
         }
     }
 }
