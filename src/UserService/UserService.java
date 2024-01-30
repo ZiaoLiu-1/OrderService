@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
 import java.io.BufferedReader;
@@ -61,6 +62,24 @@ public class UserService {
         }
     }
 
+    private static String hashPassword(String passwordToHash) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] encodedhash = digest.digest(passwordToHash.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hexString = new StringBuilder(2 * encodedhash.length);
+            for (int i = 0; i < encodedhash.length; i++) {
+                String hex = Integer.toHexString(0xff & encodedhash[i]);
+                if (hex.length() == 1) {
+                    hexString.append('0');
+                }
+                hexString.append(hex);
+            }
+            return hexString.toString();
+        } catch (Exception ex) {
+            throw new RuntimeException("Error hashing password", ex);
+        }
+    }
+
     public static void main(String[] args) throws IOException {
         // Initialize SQLite Database
         String path = System.getProperty("user.dir");
@@ -89,7 +108,7 @@ public class UserService {
     
             // Create table if not exists
             String sql = "CREATE TABLE IF NOT EXISTS users (" +
-                         "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                         "id INTEGER PRIMARY KEY, " +
                          "username TEXT NOT NULL, " +
                          "email TEXT NOT NULL, " +
                          "password TEXT NOT NULL);";
@@ -107,7 +126,7 @@ public class UserService {
             }
         }
     }
-    
+ 
     private static String getDatabaseUrl() {
         String userHome = System.getProperty("user.dir");
         String databasePath = userHome + "/Database/info.db"; // Use File.separator for better cross-platform support
@@ -129,13 +148,13 @@ public class UserService {
                     System.out.println(command);
                     switch (command) {
                         case "create":
-                            createUser(json);
+                            createUser(exchange, json);
                             break;
                         case "update":
-                            updateUser(json);
+                            updateUser(exchange, json);
                             break;
                         case "delete":
-                            deleteUser(json);
+                            deleteUser(exchange, json);
                             break;
                         default:
                             // Handle unknown command
@@ -168,16 +187,18 @@ public class UserService {
                         ResultSet rs = query.executeQuery();
                 
                         if (rs.next()) {
-                            // Assuming columns like name, email, etc. Adjust according to your schema
                             String name = rs.getString("username");
                             String email = rs.getString("email");
+                            String password = rs.getString("password");
                 
                             JSONObject respond = new JSONObject();
                             respond.put("id", id);
                             respond.put("username", name);
                             respond.put("email", email);
+                            respond.put("password", hashPassword(password)); 
                 
                             sendResponse(exchange, respond.toString(), 200);
+
                         } else {
                             // Handle case where no user is found
                             sendResponse(exchange, "User not found", 404);
@@ -225,114 +246,189 @@ public class UserService {
     }
 
 
-private static void createUser(JSONObject json) {
-    System.out.println("Create");
-    String url = getDatabaseUrl();
-
-    // Check for empty username or id
-    if (!json.has("username") || json.optString("username").isEmpty() || 
-        !json.has("id")) {
-        System.err.println("Username or ID is empty. Command refused.");
-        return;
-    }
-
-    try (Connection conn = DriverManager.getConnection(url);
-         PreparedStatement pstmtCheck = conn.prepareStatement(
-                 "SELECT COUNT(*) FROM users WHERE id = ?");
-         PreparedStatement pstmtInsert = conn.prepareStatement(
-                 "INSERT INTO users (id, username, email, password) VALUES (?, ?, ?, ?)")) {
-
-        // Check if ID already exists
-        pstmtCheck.setInt(1, json.getInt("id"));
-        ResultSet rs = pstmtCheck.executeQuery();
-        if (rs.next() && rs.getInt(1) > 0) {
-            System.err.println("ID already exists. Command refused.");
+    private static void createUser(HttpExchange exchange, JSONObject json) {
+        System.out.println("Create");
+        String url = getDatabaseUrl();
+    
+        // Validate required fields
+        if (!json.has("username") || json.optString("username").isEmpty() ||
+            !json.has("email") || json.optString("email").isEmpty() ||
+            !json.has("password") || json.optString("password").isEmpty() ||
+            !json.has("id")) {
+    
+            System.err.println("Username, Email, Password, or ID is empty. Command refused.");
+            try {
+                sendResponse(exchange, "Bad Request", 400);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
             return;
         }
-
-        // Insert the new user
-        pstmtInsert.setInt(1, json.getInt("id"));
-        pstmtInsert.setString(2, json.getString("username"));
-        pstmtInsert.setString(3, json.optString("email", "")); // Allow empty email
-        pstmtInsert.setString(4, json.optString("password", "")); // Allow empty password
-        pstmtInsert.executeUpdate();
-    } catch (SQLException e) {
-        System.err.println(e.getMessage());
+    
+        try (Connection conn = DriverManager.getConnection(url);
+             PreparedStatement pstmtCheck = conn.prepareStatement(
+                     "SELECT COUNT(*) FROM users WHERE id = ?");
+             PreparedStatement pstmtInsert = conn.prepareStatement(
+                     "INSERT INTO users (id, username, email, password) VALUES (?, ?, ?, ?)")) {
+    
+            // Check if ID already exists
+            pstmtCheck.setInt(1, json.getInt("id"));
+            ResultSet rs = pstmtCheck.executeQuery();
+            if (rs.next() && rs.getInt(1) > 0) {
+                System.err.println("ID already exists. Command refused.");
+                sendResponse(exchange, "User ID already exists", 409);
+                return;
+            }
+    
+            // Insert the new user 
+            pstmtInsert.setInt(1, json.getInt("id"));
+            pstmtInsert.setString(2, json.getString("username"));
+            pstmtInsert.setString(3, json.getString("email"));
+            pstmtInsert.setString(4, json.getString("password"));
+            pstmtInsert.executeUpdate();
+    
+            // Prepare response JSON
+            JSONObject responseJson = new JSONObject();
+            responseJson.put("id", json.getInt("id"));
+            responseJson.put("username", json.getString("username"));
+            responseJson.put("email", json.getString("email"));
+            responseJson.put("password", hashPassword(json.getString("password"))); 
+    
+            // Send response
+            sendResponse(exchange, responseJson.toString(), 200);
+    
+        } catch (SQLException e) {
+            System.err.println(e.getMessage());
+            try {
+                sendResponse(exchange, "Internal Server Error", 500);
+            } catch (IOException e1) {
+                e1.printStackTrace();
+            }
+        } catch (IOException e) {
+            System.err.println(e.getMessage());
+        }
     }
-}
 
 
 
-private static void updateUser(JSONObject json) {
-    String url = getDatabaseUrl();
-
-    // Check for empty or missing id
-    if (!json.has("id")) {
-        System.err.println("ID is missing. Command refused.");
-        return;
-    }
-
-    try (Connection conn = DriverManager.getConnection(url)) {
-        // Building the SQL UPDATE statement dynamically
-        StringBuilder sql = new StringBuilder("UPDATE users SET ");
-        boolean needComma = false;
-
-        if (json.has("username") && !json.optString("username").isEmpty()) {
-            sql.append("username = ?");
-            needComma = true;
+    private static void updateUser(HttpExchange exchange, JSONObject json) {
+        String url = getDatabaseUrl();
+    
+        // Check for empty or missing id
+        if (!json.has("id")) {
+            System.err.println("ID is missing. Command refused.");
+            try {
+                sendResponse(exchange, "Bad Request", 400);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return;
         }
-        if (json.has("email")) {
-            if (needComma) sql.append(", ");
-            sql.append("email = ?");
-            needComma = true;
-        }
-        if (json.has("password")) {
-            if (needComma) sql.append(", ");
-            sql.append("password = ?");
-        }
-        sql.append(" WHERE id = ?");
-
-        try (PreparedStatement pstmtUpdate = conn.prepareStatement(sql.toString())) {
-            // Setting the parameters for the PreparedStatement
-            int paramIndex = 1;
-            if (json.has("username") && !json.optString("username").isEmpty()) {
-                pstmtUpdate.setString(paramIndex++, json.getString("username"));
+    
+        int userId = json.getInt("id");
+    
+        try (Connection conn = DriverManager.getConnection(url)) {
+            // Building the SQL UPDATE statement dynamically
+            StringBuilder sql = new StringBuilder("UPDATE users SET ");
+            List<Object> params = new ArrayList<>();
+            boolean needComma = false;
+    
+            if (json.has("username")) {
+                sql.append("username = ?");
+                params.add(json.getString("username"));
+                needComma = true;
             }
             if (json.has("email")) {
-                pstmtUpdate.setString(paramIndex++, json.getString("email"));
+                if (needComma) sql.append(", ");
+                sql.append("email = ?");
+                params.add(json.getString("email"));
+                needComma = true;
             }
             if (json.has("password")) {
-                pstmtUpdate.setString(paramIndex++, json.getString("password")); // Remember to hash the password
+                if (needComma) sql.append(", ");
+                sql.append("password = ?");
+                params.add(json.getString("password")); // Hash the password
             }
-            pstmtUpdate.setInt(paramIndex, json.getInt("id"));
-            System.out.println(pstmtUpdate.toString());
-            int affectedRows = pstmtUpdate.executeUpdate();
-            if (affectedRows == 0) {
-                System.err.println("User ID does not exist. No update performed.");
+            sql.append(" WHERE id = ?");
+    
+            try (PreparedStatement pstmtUpdate = conn.prepareStatement(sql.toString())) {
+                int paramIndex = 1;
+                for (Object param : params) {
+                    pstmtUpdate.setObject(paramIndex++, param);
+                }
+                pstmtUpdate.setInt(paramIndex, userId);
+    
+                int affectedRows = pstmtUpdate.executeUpdate();
+    
+                if (affectedRows == 0) {
+                    System.err.println("User ID does not exist. No update performed.");
+                    sendResponse(exchange, "User ID does not exist", 404);
+                    return;
+                }
             }
+    
+            // After updating, retrieve all user details to send back
+            try (PreparedStatement pstmtSelect = conn.prepareStatement("SELECT * FROM users WHERE id = ?")) {
+                pstmtSelect.setInt(1, userId);
+                ResultSet rs = pstmtSelect.executeQuery();
+    
+                if (rs.next()) {
+                    JSONObject responseJson = new JSONObject();
+                    responseJson.put("id", rs.getInt("id"));
+                    responseJson.put("username", rs.getString("username"));
+                    responseJson.put("email", rs.getString("email"));
+                    responseJson.put("password", hashPassword(rs.getString("password")));
+    
+                    sendResponse(exchange, responseJson.toString(), 200);
+                } else {
+                    sendResponse(exchange, "User not found after update", 500);
+                }
+            }
+    
+        } catch (SQLException e) {
+            System.err.println(e.getMessage());
+            try {
+                sendResponse(exchange, "Internal Server Error", 500);
+            } catch (IOException e1) {
+                e1.printStackTrace();
+            }
+        } catch (IOException e) {
+            System.err.println("Error sending response: " + e.getMessage());
         }
-    } catch (SQLException e) {
-        System.err.println(e.getMessage());
-    }
-}
-
-
-
-
-private static void deleteUser(JSONObject json) {
-    String url = getDatabaseUrl();
-    try (Connection conn = DriverManager.getConnection(url);
-         PreparedStatement pstmt = conn.prepareStatement(
-                 "DELETE FROM users WHERE id = ? AND username = ? AND email = ? AND password = ?")) {
-        pstmt.setInt(1, json.getInt("id"));
-        pstmt.setString(2, json.getString("username"));
-        pstmt.setString(3, json.getString("email"));
-        pstmt.setString(4, json.getString("password")); // Consider how passwords are stored/hashed
-
-        pstmt.executeUpdate();
-    } catch (SQLException e) {
-        System.err.println(e.getMessage());
     }
 
+
+
+
+    private static void deleteUser(HttpExchange exchange, JSONObject json) {
+        String url = getDatabaseUrl();
+        try (Connection conn = DriverManager.getConnection(url);
+             PreparedStatement pstmt = conn.prepareStatement(
+                     "DELETE FROM users WHERE id = ? AND username = ? AND email = ? AND password = ?")) {
+            pstmt.setInt(1, json.getInt("id"));
+            pstmt.setString(2, json.getString("username"));
+            pstmt.setString(3, json.getString("email"));
+            pstmt.setString(4, json.getString("password"));
+    
+            int affectedRows = pstmt.executeUpdate();
+    
+            if (affectedRows == 0) {
+                System.err.println("No user found or user could not be deleted.");
+                sendResponse(exchange, "", 404); 
+            } else {
+                sendResponse(exchange, "", 200); 
+            }
+    
+        } catch (SQLException e) {
+            System.err.println(e.getMessage());
+            try {
+                sendResponse(exchange, "", 500);
+            } catch (IOException e1) {
+                e1.printStackTrace();
+            } 
+        } catch (IOException e) {
+            System.err.println("IOException occurred while sending response: " + e.getMessage());
+        }
     }
+
 }
