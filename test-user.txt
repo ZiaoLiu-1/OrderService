@@ -1,0 +1,57 @@
+USER create 12345 johndoe johndoe@example.com pass123 # 200 User successfully created
+USER create 12346 janedoe janedoe@example.com pass456 # 200 User successfully created
+USER create 12347 jesse jesse@example.com pass789 # 200 User successfully created
+USER create 12345 janedoe2 janedoe2@example.com pass789 # 409 Duplicate user ID
+USER create 20000  void@example.com pass123 # 400 Invalid username
+USER create 20001 noEmail  pass123 # 400 Invalid email
+USER create 20002 noPassword noPassword@example.com  # 400 Invalid password
+USER create -1 hacker bad@example.com pass123 # 400 Invalid user ID
+
+USER get 12345 # 200 Successfully retrieved user data
+USER get 12346 # 200 Successfully retrieved user data
+USER get 99999 # 404 User not found
+USER get -1 # 404 User not found
+
+USER update 12345 # 200 Updated nothing
+USER update 12345 username:johndoeNew email:johndoeNew@example.com password:passNew123 # 200 User data updated
+USER get 12345 # 200 Check updated user data
+
+USER update 12346 username:janedoeNew # 200 User data updated
+USER get 12346 # 200 Check partially updated user data (only username updated)
+USER update 12346 email:alsoUpdated@example.com # 200 User data updated
+USER get 12346 # 200 Check updated user data (email updated)
+
+USER update 12346 password:passNew123 # 200 User data updated
+USER get 12346 # 200 Check updated user data (password updated)
+
+USER update 12347 username: # 400 Invalid username
+USER update 12347 email: # 400 Invalid email
+USER update 12347 password: # 400 Invalid password
+
+USER update 99999 username:janeDoeNew email:janeDoeNew@example.com password:pass789 # 404 User not found
+USER update -1 username:badUser # 400 Invalid user ID
+
+USER delete 12345 johndoeNew johndoeNew@example.com passNew123 # 200 User successfully deleted
+USER get 12345 # 404 User already deleted
+USER get 12346 # 200 Successfully retrieved user data
+USER delete 12346 janedoeNew alsoUpdated@example.com passNew123 # 200 User successfully deleted
+USER get 12346 # 404 User already deleted
+
+USER create 12345 johndoe johndoe@example.com thisisapassword # 200 User successfully created
+USER create 12346 janedoe janedoe@example.com anotherpassword # 200 User successfully created
+
+USER delete 12345 notjohndoe johndoe@example.com thisisapassword # 401 Unauthorized, incorrect username
+USER delete 12345 johndoe incorrect@example.com thisisapassword # 401 Unauthorized, incorrect email
+USER delete 12345 johndoe johndoe@example.com wrongpass # 401 Unauthorized, incorrect password
+USER get 12345 # 200 User still exists after failed delete
+USER delete 12345  johndoe@example.com thisisapassword # 400 Empty username
+USER delete 12345 johndoe  thisisapassword # 400 Empty email
+USER delete 12345 johndoe johndoe@example.com  # 400 Empty password
+USER get 12345 # 200 User still exists after failed delete
+USER delete 12345 johndoe johndoe@example.com thisisapassword # 200 User successfully deleted
+USER get 12345 # 404 User already deleted
+
+USER delete 99999 janedoe janedoe@example.com pass456 # 404 User not found
+# user 12346 still exists, should be there for next test
+# user 12347 still exists, should be there for next test
+shutdown

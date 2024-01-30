@@ -1,8 +1,8 @@
 import com.sun.net.httpserver.HttpServer;
-import com.sun.net.httpserver.Authenticator.Result;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -32,9 +32,11 @@ public class UserService {
         int port;
         String ip;
 
+
         public ServiceConfig(int port, String ip) {
             this.port = port;
             this.ip = ip;
+
         }
 
         // Getters
@@ -83,13 +85,19 @@ public class UserService {
     public static void main(String[] args) throws IOException {
         // Initialize SQLite Database
         String path = System.getProperty("user.dir");
+
+        // Convert the string path to a Path object
+        Path currentPath = Paths.get(path);
+
+        // Get the parent of the current path
+        Path parentPath = currentPath.getParent();
+        path = parentPath.getParent().toString();  
         ServiceConfig userServiceConfig = readConfig(path + "/config.json", "UserService");
         if (userServiceConfig == null) {
             System.err.println("Failed to read config for UserService. Using default settings.");
             userServiceConfig = new ServiceConfig(14001, "127.0.0.1"); // default settings
         }
         int port = userServiceConfig.getPort();
-        initializeDatabase();
         HttpServer server = HttpServer.create(new InetSocketAddress(userServiceConfig.getIp(), port), 0);
         server.setExecutor(Executors.newFixedThreadPool(20)); // Adjust the pool size as needed
         server.createContext("/user", new UserHandler(server));
@@ -98,38 +106,17 @@ public class UserService {
         System.out.println("Server started on port " + port);
     }
 
-    private static void initializeDatabase() {
-        String url = getDatabaseUrl();
-        Connection conn = null;
-        try {
-            Class.forName("org.sqlite.JDBC");
-            conn = DriverManager.getConnection(url);
-            Statement stmt = conn.createStatement();
     
-            // Create table if not exists
-            String sql = "CREATE TABLE IF NOT EXISTS users (" +
-                         "id INTEGER PRIMARY KEY, " +
-                         "username TEXT NOT NULL, " +
-                         "email TEXT NOT NULL, " +
-                         "password TEXT NOT NULL);";
-    
-            stmt.execute(sql);
-        } catch (ClassNotFoundException | SQLException e) {
-            System.err.println(e.getMessage());
-        } finally {
-            try {
-                if (conn != null) {
-                    conn.close();
-                }
-            } catch (SQLException ex) {
-                System.err.println(ex.getMessage());
-            }
-        }
-    }
  
     private static String getDatabaseUrl() {
-        String userHome = System.getProperty("user.dir");
-        String databasePath = userHome + "/Database/info.db"; // Use File.separator for better cross-platform support
+        String path = System.getProperty("user.dir");
+
+        // Convert the string path to a Path object
+        Path currentPath = Paths.get(path);
+
+        // Get the parent of the current path
+        path = currentPath.getParent().toString();
+        String databasePath = path + "/Database/info.db";
         return "jdbc:sqlite:" + databasePath;
     }
 
@@ -156,8 +143,12 @@ public class UserService {
                         case "delete":
                             deleteUser(exchange, json);
                             break;
+                        case "shutdown":
+                            System.out.println("Shutting down");
+                            handleShutdownCommand(exchange, server);
+                            break;
                         default:
-                            sendResponse(exchange, "Invalid command", 400);
+                            sendResponse(exchange, "Unknown command", 400);
                             return;
                     }
         
@@ -217,7 +208,16 @@ public class UserService {
         }
     }
     
-
+    private static void handleShutdownCommand(HttpExchange exchange, HttpServer server) throws IOException {
+        JSONObject responseJson = new JSONObject();
+        responseJson.put("command", "shutdown");
+    
+        // Send the shutdown command response
+        sendResponse(exchange, responseJson.toString(), 200);
+    
+        // Perform server shutdown operations
+        server.stop(4); // Gracefully stop the server with a delay of 1 second
+    }
         private static String getRequestBody(HttpExchange exchange) throws IOException {
             try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
                 StringBuilder requestBody = new StringBuilder();
@@ -254,7 +254,7 @@ public class UserService {
         if (!json.has("username") || json.optString("username").isEmpty() ||
             !json.has("email") || json.optString("email").isEmpty() ||
             !json.has("password") || json.optString("password").isEmpty() ||
-            !json.has("id")) {
+            !json.has("id") || (json.getInt("id") < 0)) {
     
             System.err.println("Username, Email, Password, or ID is empty. Command refused.");
             try {
@@ -333,21 +333,21 @@ public class UserService {
             List<Object> params = new ArrayList<>();
             boolean needComma = false;
     
-            if (json.has("username")) {
+            if (json.has("username") && !json.optString("username").isEmpty()) {
                 sql.append("username = ?");
                 params.add(json.getString("username"));
                 needComma = true;
             }
-            if (json.has("email")) {
+            if (json.has("email") && !json.optString("email").isEmpty()) {
                 if (needComma) sql.append(", ");
                 sql.append("email = ?");
                 params.add(json.getString("email"));
                 needComma = true;
             }
-            if (json.has("password")) {
+            if (json.has("password") && !json.optString("password").isEmpty()) {
                 if (needComma) sql.append(", ");
                 sql.append("password = ?");
-                params.add(json.getString("password")); 
+                params.add(json.getString("password")); // Hash the password
             }
             sql.append(" WHERE id = ?");
     
@@ -402,6 +402,16 @@ public class UserService {
 
     private static void deleteUser(HttpExchange exchange, JSONObject json) {
         String url = getDatabaseUrl();
+        if (!json.has("id") || !json.has("username") || !json.has("email") || !json.has("password")) {
+            System.err.println("Missing required fields. Command refused.");
+            try {
+                sendResponse(exchange, "Bad Request: Missing required fields", 400);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return;
+        }
+    
         try (Connection conn = DriverManager.getConnection(url);
              PreparedStatement pstmt = conn.prepareStatement(
                      "DELETE FROM users WHERE id = ? AND username = ? AND email = ? AND password = ?")) {
@@ -414,7 +424,7 @@ public class UserService {
     
             if (affectedRows == 0) {
                 System.err.println("No user found or user could not be deleted.");
-                sendResponse(exchange, "", 404); 
+                sendResponse(exchange, "", 400); 
             } else {
                 sendResponse(exchange, "", 200); 
             }
@@ -422,7 +432,7 @@ public class UserService {
         } catch (SQLException e) {
             System.err.println(e.getMessage());
             try {
-                sendResponse(exchange, "Internal Server Error", 500);
+                sendResponse(exchange, "", 500);
             } catch (IOException e1) {
                 e1.printStackTrace();
             } 

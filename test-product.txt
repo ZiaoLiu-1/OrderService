@@ -1,0 +1,49 @@
+PRODUCT create 101 Phone Smartphone 799.99 50 # 200 Product successfully created
+PRODUCT create 102 Laptop GamingLaptop 1200.00 30 # 200 Product successfully created
+PRODUCT create 103 Headphones WirelessHeadphones 299.99 100 # 200 Product successfully created
+PRODUCT create 101 Camera DSLRCamera 500.00 20 # 409 Duplicate product ID
+PRODUCT create 104  Smartwatch 399.99 40 # 400 Invalid product name
+PRODUCT create 105 Smartwatch  399.99 40 # 400 Invalid product description
+PRODUCT create 106 Smartwatch HealthTracking -399.99 40 # 400 Invalid product price
+PRODUCT create 107 Smartwatch HealthTracking 399.99 -40 # 400 Invalid product quantity
+PRODUCT create -1 Smartwatch HealthTracking 399.99 40 # 400 Invalid product ID
+
+PRODUCT info 101 # 200 Successfully retrieved product data
+PRODUCT info 102 # 200 Successfully retrieved product data
+PRODUCT info 999 # 404 Product not found
+PRODUCT info -1 # 404 Product not found
+
+PRODUCT update 101 name:PhoneX description:UpdatedModel price:899.99 quantity:60 # 200 Product data updated
+PRODUCT info 101 # 200 Check updated product data
+
+PRODUCT update 102 name:LaptopPro # 200 Product name updated
+PRODUCT info 102 # 200 Check partially updated product data
+PRODUCT update 102 description:EnhancedGaming price:1300.00 # 200 Product data updated
+PRODUCT info 102 # 200 Check updated product data
+
+PRODUCT update 103 quantity:150 # 200 Product quantity updated
+PRODUCT info 103 # 200 Check updated product data
+
+PRODUCT update 104 name: # 400 Invalid product name
+PRODUCT update 104 description: # 400 Invalid product description
+PRODUCT update 104 price:-500.00 # 400 Invalid product price
+PRODUCT update 104 quantity:-20 # 400 Invalid product quantity
+
+PRODUCT update 999 name:Nonexistent description:DoesNotExist price:100.00 quantity:10 # 404 Product not found
+PRODUCT update -1 name:InvalidID # 400 Invalid product ID
+
+PRODUCT delete 101 PhoneX 899.99 60 # 200 Product successfully deleted
+PRODUCT info 101 # 404 Product already deleted
+PRODUCT info 102 # 200 Successfully retrieved product data
+PRODUCT delete 102 LaptopPro 1300.00 30 # 200 Product successfully deleted
+PRODUCT info 102 # 404 Product already deleted
+
+PRODUCT delete 103 WrongName 299.99 150 # 404 Not found, incorrect product name
+PRODUCT delete 103 Headphones -299.99 150 # 400 Bad request, negative product price
+PRODUCT delete 103 Headphones 299.99 -150 # 400 Bad request, negative product quantity
+PRODUCT info 103 # 200 Product still exists after failed delete
+PRODUCT delete 103 Headphones 299.99 150 # 200 Product successfully deleted
+PRODUCT info 103 # 404 Product already deleted
+
+PRODUCT delete 999 Nonexistent 100.00 10 # 404 Product not found
+shutdown

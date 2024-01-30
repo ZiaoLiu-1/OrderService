@@ -1,11 +1,9 @@
 import com.sun.net.httpserver.HttpServer;
-import com.sun.net.httpserver.Authenticator.Result;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.List;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -23,10 +21,11 @@ import org.json.*;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.net.URL;
-
+import java.net.URI;
 
 
 public class OrderService {
+    static boolean isFirstCommandReceived = false;
     static class ServiceConfig {
         int user_port;
         int product_port;
@@ -105,16 +104,29 @@ public class OrderService {
     public static void main(String[] args) throws IOException {
         // Initialize SQLite Database
         String path = System.getProperty("user.dir");
+
+        // Convert the string path to a Path object
+        Path currentPath = Paths.get(path);
+
+        // Get the parent of the current path
+        Path parentPath = currentPath.getParent();
+        path = parentPath.getParent().toString();  
         ServiceConfig orderServiceConfig = readConfig(path + "/config.json");
         if (orderServiceConfig == null) {
             System.out.println("Failed to read config for OrderService. Using default settings.");
             orderServiceConfig = new ServiceConfig(8080, 8081, 8082, "127.0.0.1", "127.0.0.1","127.0.0.1");
         }
+        String url = getDatabaseUrl();
+        try (Connection conn = DriverManager.getConnection(url);
+             Statement stmt = conn.createStatement()) {
+                initTables(conn);
+             }catch(SQLException e){
+                System.err.println(e.getMessage());
+             }
         int port = orderServiceConfig.getPort(2);
-        initializeDatabase();
         HttpServer server = HttpServer.create(new InetSocketAddress(orderServiceConfig.getIp(2), port), 0);
         server.setExecutor(Executors.newFixedThreadPool(20)); 
-        server.createContext("/order", new OrderHandler(orderServiceConfig));
+        server.createContext("/order", new OrderHandler(orderServiceConfig, server));
         server.createContext("/user", new UserHandler(orderServiceConfig));
         server.createContext("/product", new ProductHandler(orderServiceConfig));
     
@@ -124,50 +136,27 @@ public class OrderService {
         System.out.println("Server started on port " + port);
     }
     
-
-    private static void initializeDatabase() {
-        System.out.println("Initializing database...");
-        String url = getDatabaseUrl();
-        Connection conn = null;
-        try {
-            Class.forName("org.sqlite.JDBC");
-            conn = DriverManager.getConnection(url);
-            Statement stmt = conn.createStatement();
-    
-            // Create table if not exists
-            String sql = "CREATE TABLE IF NOT EXISTS orders (" +
-                     "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
-                     "product_id INTEGER NOT NULL, " +
-                     "user_id INTEGER NOT NULL, " +
-                     "quantity INTEGER NOT NULL, "+
-                     "status TEXT NOT NULL)";
-    
-            stmt.execute(sql);
-        } catch (ClassNotFoundException | SQLException e) {
-            System.err.println(e.getMessage());
-        } finally {
-            try {
-                if (conn != null) {
-                    conn.close();
-                }
-            } catch (SQLException ex) {
-                System.err.println(ex.getMessage());
-            }
-        }
-    }
     
     private static String getDatabaseUrl() {
-        String userHome = System.getProperty("user.dir");
-        String databasePath = userHome + "/Database/info.db"; // Use File.separator for better cross-platform support
+        String path = System.getProperty("user.dir");
+
+        // Convert the string path to a Path object
+        Path currentPath = Paths.get(path);
+
+        // Get the parent of the current path
+        path = currentPath.getParent().toString();
+        String databasePath = path + "/Database/info.db";
         return "jdbc:sqlite:" + databasePath;
     }
 
     static class OrderHandler implements HttpHandler {
         private ServiceConfig config; // Instance variable to hold the configuration
+        private HttpServer server;
     
         // Constructor that accepts a ServiceConfig instance
-        public OrderHandler(ServiceConfig config) {
+        public OrderHandler(ServiceConfig config, HttpServer server) {
             this.config = config;
+            this.server = server;
         }
     
         @Override
@@ -175,11 +164,31 @@ public class OrderService {
             if ("POST".equals(exchange.getRequestMethod())) {   
                 JSONObject requestJson = new JSONObject(getRequestBody(exchange));  
                 String command = requestJson.optString("command");  
+                System.out.println(command);
+                if (!isFirstCommandReceived) {
+                    isFirstCommandReceived = true; // Mark the flag as true after receiving the first command
+
+                    if (!"restart".equalsIgnoreCase(command)) {
+                        // If the first command is not 'restart', drop all tables
+                        System.out.println("First comamnd");
+                        dropAllTables();
+                        sendResponse(exchange, "restarted", 200);
+                    }
+                }
                     
                 switch (command) {  
                     case "place order":  
+                        System.out.println("Place Order");
                         placeOrder(requestJson, this.config, exchange); // Use the instance variable
                         break;  
+                    case "shutdown":
+                        System.out.println("SHutting down");
+                        sendShutdownCommand(config.getIp(0), config.getPort(0), "user"); // User service
+                        sendShutdownCommand(config.getIp(1), config.getPort(1), "product"); // Product service
+                        sendResponse(exchange, "Shutting down", 200);
+                        server.stop(4);
+                    case "restart":
+                        break;
                     default:    
                         sendResponse(exchange, "Invalid Request", 400); 
                         return; 
@@ -193,21 +202,110 @@ public class OrderService {
             }   
         }   
     }
-    static class UserHandler implements HttpHandler {
-        private ServiceConfig config;
-    
-        public UserHandler(ServiceConfig config) {
-            this.config = config;
-        }
-    
-        @Override
-        public void handle(HttpExchange exchange) throws IOException {
-            // Construct the URL for the User service
-            URL url = new URL("http://" + config.getIp(0) + ":" + config.getPort(0) + exchange.getRequestURI().getPath());
-            System.out.println(url);
-            forwardRequest(exchange, url);
+
+    private static void dropAllTables() {
+        System.out.println("Dropping all tables...");
+        String url = getDatabaseUrl();
+        try (Connection conn = DriverManager.getConnection(url);
+             Statement stmt = conn.createStatement()) {
+            
+            stmt.executeUpdate("DROP TABLE IF EXISTS orders;");
+            stmt.executeUpdate("DROP TABLE IF EXISTS users;");
+            stmt.executeUpdate("DROP TABLE IF EXISTS products;");
+        
+            // Initialize tables after dropping them
+            initTables(conn); // Pass the existing connection to initTables
+        } catch (SQLException e) {
+            System.err.println("Error dropping tables: " + e.getMessage());
         }
     }
+    
+    private static void initTables(Connection conn) {
+        try (Statement stmt = conn.createStatement()) {
+            // Fixed SQL statement with the added comma
+            String sql = "CREATE TABLE IF NOT EXISTS products (" +
+                         "id INTEGER PRIMARY KEY, " +
+                         "name TEXT NOT NULL, " +
+                         "description TEXT NOT NULL, " + // Added comma here
+                         "price REAL NOT NULL, " +
+                         "quantity INTEGER NOT NULL);";
+            stmt.execute(sql);
+    
+            sql = "CREATE TABLE IF NOT EXISTS orders (" +
+                  "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+                  "product_id INTEGER NOT NULL, " +
+                  "user_id INTEGER NOT NULL, " +
+                  "quantity INTEGER NOT NULL, " +
+                  "status TEXT NOT NULL);";
+            stmt.execute(sql);
+    
+            sql = "CREATE TABLE IF NOT EXISTS users (" +
+                  "id INTEGER PRIMARY KEY, " +
+                  "username TEXT NOT NULL, " +
+                  "email TEXT NOT NULL, " +
+                  "password TEXT NOT NULL);";
+            stmt.execute(sql);
+        } catch (SQLException e) {
+            System.err.println("Error initializing tables: " + e.getMessage());
+        }
+    }
+    
+    
+    private static void sendShutdownCommand(String ip, int port, String service) {
+        try {
+            URL url = new URL("http://" + ip + ":" + port + "/" + service);
+            HttpURLConnection con = (HttpURLConnection) url.openConnection();
+            con.setRequestMethod("POST");
+            con.setDoOutput(true);
+            con.setRequestProperty("Content-Type", "application/json");
+    
+            JSONObject shutdownCommand = new JSONObject();
+            shutdownCommand.put("command", "shutdown");
+    
+            try (OutputStream os = con.getOutputStream()) {
+                byte[] input = shutdownCommand.toString().getBytes(StandardCharsets.UTF_8);
+                os.write(input, 0, input.length);
+            }
+    
+            int responseCode = con.getResponseCode();
+            System.out.println("Shutdown command sent with response code: " + responseCode);
+    
+            con.disconnect();
+        } catch (Exception e) {
+            System.err.println("Error sending shutdown command: " + e.getMessage());
+        }
+    }
+    
+    static class UserHandler implements HttpHandler {
+    private ServiceConfig config;
+
+    public UserHandler(ServiceConfig config) {
+        this.config = config;
+    }
+
+    @Override
+    public void handle(HttpExchange exchange) throws IOException {
+        String requestBody = getRequestBody(exchange); // Read the request body once at the beginning
+        JSONObject requestJson = new JSONObject(requestBody); // Parse the requestBody to JSON
+        String command = requestJson.optString("command");
+
+        if (!isFirstCommandReceived) {
+            isFirstCommandReceived = true;
+
+            if (!"restart".equalsIgnoreCase(command)) {
+                dropAllTables();
+            }
+        }
+
+        try {
+            URI uri = new URI("http", null, config.getIp(0), config.getPort(0), exchange.getRequestURI().getPath(), null, null);
+            URL url = uri.toURL();
+            forwardRequest(exchange, url, requestBody); // Pass requestBody as an argument
+        } catch (Exception e) {
+            System.err.println(e.getMessage());
+        }
+    }
+}
 
     
     static class ProductHandler implements HttpHandler {
@@ -219,14 +317,30 @@ public class OrderService {
     
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            // Construct the URL for the Product service
-            URL url = new URL("http://" + config.getIp(1) + ":" + config.getPort(1) + exchange.getRequestURI().getPath());
-            System.out.println(url);
-            forwardRequest(exchange, url);
+            String requestBody = getRequestBody(exchange); // Read the request body once at the beginning
+            JSONObject requestJson = new JSONObject(requestBody); // Parse the requestBody to JSON
+            String command = requestJson.optString("command");
+    
+            if (!isFirstCommandReceived) {
+                isFirstCommandReceived = true;
+    
+                if (!"restart".equalsIgnoreCase(command)) {
+                    dropAllTables();
+                }
+            }
+    
+            try {
+                URI uri = new URI("http", null, config.getIp(1), config.getPort(1), exchange.getRequestURI().getPath(), null, null);
+                URL url = uri.toURL();
+                forwardRequest(exchange, url, requestBody); // Pass requestBody as an argument
+            } catch (Exception e) {
+                System.err.println(e.getMessage());
+            }
         }
     }
+    
 
-    private static void forwardRequest(HttpExchange exchange, URL url) throws IOException {
+    private static void forwardRequest(HttpExchange exchange, URL url, String requestBody) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         connection.setRequestMethod(exchange.getRequestMethod());
     
@@ -234,10 +348,10 @@ public class OrderService {
         exchange.getRequestHeaders().forEach((key, value) -> connection.setRequestProperty(key, String.join(",", value)));
     
         // Only set doOutput for methods that have a body
-        if ("POST".equals(exchange.getRequestMethod()) || "PUT".equals(exchange.getRequestMethod())) {
+        if ("POST".equals(exchange.getRequestMethod())) {
             connection.setDoOutput(true);
             try (OutputStream os = connection.getOutputStream()) {
-                byte[] input = getRequestBody(exchange).getBytes(StandardCharsets.UTF_8);
+                byte[] input = requestBody.getBytes(StandardCharsets.UTF_8);
                 os.write(input, 0, input.length);
             }
         }
@@ -264,6 +378,8 @@ public class OrderService {
             connection.disconnect();
         }
     }
+    
+    
     
     
 
@@ -297,14 +413,16 @@ public class OrderService {
 
     private static void placeOrder(JSONObject json, ServiceConfig config, HttpExchange exchange) {
         try {
-            if (!json.has("product_id") || !json.has("user_id") || !json.has("quantity")) {
+            if (!json.has("product_id") || !json.has("quantity")) {
                 sendResponse(exchange, "Invalid Request: Missing required fields.", 400);
                 return;
             }
-    
             int productId = json.getInt("product_id");
-            int userId = json.getInt("user_id");
+            int userId = 1;
             int quantity = json.getInt("quantity");
+            if (json.has("user_id")){
+                userId = json.getInt("user_id");
+            }
     
             // Check if user exists by sending GET request to UserService
             boolean userExists = checkEntityExistence(config.getIp(0), config.getPort(0), "user", userId);
@@ -316,14 +434,14 @@ public class OrderService {
             // If the user or product don't exist
             if (!userExists || !productExists) {
                 sendResponse(exchange, "Invalid Request: User/Product ID does not exist.", 400);
-                createOrder(json, "Invalid Request", config);
+                createOrder(json, "Invalid Request");
                 return;
             }
     
             // If requested quantity exceeds available quantity
             if (availableQuantity < quantity) {
                 sendResponse(exchange, "Exceeded quantity limit.", 400);
-                createOrder(json, "Exceeded quantity limit", config);
+                createOrder(json, "Exceeded quantity limit");
                 return;
             }
     
@@ -331,16 +449,13 @@ public class OrderService {
     
             // Update product quantity
             boolean updateSuccess = updateProductQuantity(config.getIp(1), config.getPort(1), productId, newQuantity);
+            createOrder(json, "Success");
             if (!updateSuccess) {
                 sendResponse(exchange, "Failed to update product quantity. Command refused.", 400);
                 return;
             }
-
-            // Create the order in the database and obtain the response JSON with order details
-            JSONObject orderResponse = createOrder(json, "Success", config);
-        
-            // Send the response back with the order details
-            sendResponse(exchange, orderResponse.toString(), 200); // OK status code
+            
+            sendResponse(exchange, "Order placed successfully.", 200);
         } catch (Exception e) {
             System.err.println("Error placing order: " + e.getMessage());
             try {
@@ -351,95 +466,122 @@ public class OrderService {
         }
     }
     
-    private static JSONObject createOrder(JSONObject json, String status, ServiceConfig config) throws SQLException {
+    private static void createOrder(JSONObject json, String status) {
         String url = getDatabaseUrl();
-        JSONObject responseJson = new JSONObject();
     
+        // SQL statement to insert a new order
         String insertOrderSQL = "INSERT INTO orders (product_id, user_id, quantity, status) VALUES (?, ?, ?, ?)";
     
         try (Connection conn = DriverManager.getConnection(url);
              PreparedStatement pstmt = conn.prepareStatement(insertOrderSQL, Statement.RETURN_GENERATED_KEYS)) {
     
+            // Set values for the insert statement
             pstmt.setInt(1, json.getInt("product_id"));
             pstmt.setInt(2, json.getInt("user_id"));
             pstmt.setInt(3, json.getInt("quantity"));
-            pstmt.setString(4, status);
-            
+            pstmt.setString(4, status); // Assuming the order is successful at this point
+            System.out.println(pstmt);
+            // Execute the insert statement
             int affectedRows = pstmt.executeUpdate();
             if (affectedRows == 0) {
                 throw new SQLException("Creating order failed, no rows affected.");
             }
     
+            // Retrieve the generated order ID
             try (ResultSet generatedKeys = pstmt.getGeneratedKeys()) {
                 if (generatedKeys.next()) {
                     long orderId = generatedKeys.getLong(1);
+                    // Construct a JSON response with the order details
+                    JSONObject responseJson = new JSONObject();
                     responseJson.put("id", orderId);
                     responseJson.put("product_id", json.getInt("product_id"));
                     responseJson.put("user_id", json.getInt("user_id"));
                     responseJson.put("quantity", json.getInt("quantity"));
-                    responseJson.put("status", status);
+                    responseJson.put("status", "Success");
                 } else {
                     throw new SQLException("Creating order failed, no ID obtained.");
                 }
             }
+        } catch (SQLException e) {
+            System.err.println("SQLException: " + e.getMessage());
         }
-        return responseJson;
     }
+    
+
     
     
     private static boolean checkEntityExistence(String ip, int port, String endpoint, int entityId) throws IOException {
-        URL url = new URL("http://" + ip + ":" + port + "/" + endpoint + "/" + entityId);
-        System.out.println(url);
-        HttpURLConnection con = (HttpURLConnection) url.openConnection();
-        con.setRequestMethod("GET");
-        int responseCode = con.getResponseCode();
-        con.disconnect();
-        return responseCode == HttpURLConnection.HTTP_OK;
+        try {
+            URI uri = new URI("http", null, ip, port, "/" + endpoint + "/" + entityId, null, null);
+            URL url = uri.toURL();
+            System.out.println(url);
+    
+            HttpURLConnection con = (HttpURLConnection) url.openConnection();
+            con.setRequestMethod("GET");
+            int responseCode = con.getResponseCode();
+            con.disconnect();
+            return responseCode == HttpURLConnection.HTTP_OK;
+        } catch (Exception e) { // Catch URISyntaxException and IOException
+            throw new IOException("Error constructing URL or opening connection", e);
+        }
     }
     
     private static int getProductQuantity(String ip, int port, int productId) throws IOException {
-        URL url = new URL("http://" + ip + ":" + port + "/product/" + productId);
-        HttpURLConnection con = (HttpURLConnection) url.openConnection();
-        con.setRequestMethod("GET");
+        try {
+            URI uri = new URI("http", null, ip, port, "/product/" + productId, null, null);
+            URL url = uri.toURL();
     
-        if (con.getResponseCode() != HttpURLConnection.HTTP_OK) {
-            con.disconnect();
-            return -1; // Error case
+            HttpURLConnection con = (HttpURLConnection) url.openConnection();
+            con.setRequestMethod("GET");
+    
+            if (con.getResponseCode() != HttpURLConnection.HTTP_OK) {
+                con.disconnect();
+                return -1; // Error case
+            }
+    
+            try (BufferedReader in = new BufferedReader(new InputStreamReader(con.getInputStream()))) {
+                String inputLine;
+                StringBuilder content = new StringBuilder();
+                while ((inputLine = in.readLine()) != null) {
+                    content.append(inputLine);
+                }
+    
+                JSONObject response = new JSONObject(content.toString());
+                return response.getInt("quantity");
+            } finally {
+                con.disconnect();
+            }
+        } catch (Exception e) { // Catch URISyntaxException, IOException, JSONException
+            throw new IOException("Error fetching product quantity", e);
         }
-    
-        BufferedReader in = new BufferedReader(new InputStreamReader(con.getInputStream()));
-        String inputLine;
-        StringBuilder content = new StringBuilder();
-        while ((inputLine = in.readLine()) != null) {
-            content.append(inputLine);
-        }
-        in.close();
-        con.disconnect();
-    
-        JSONObject response = new JSONObject(content.toString());
-        return response.getInt("quantity");
     }
     
     private static boolean updateProductQuantity(String ip, int port, int productId, int newQuantity) throws IOException {
-        URL url = new URL("http://" + ip + ":" + port + "/product/" + productId);
-        HttpURLConnection con = (HttpURLConnection) url.openConnection();
-        con.setRequestMethod("POST");
-        con.setDoOutput(true);
-        con.setRequestProperty("Content-Type", "application/json");
+        try {
+            URI uri = new URI("http", null, ip, port, "/product/" + productId, null, null);
+            URL url = uri.toURL();
     
-        JSONObject productUpdate = new JSONObject();
-        productUpdate.put("command", "update"); // Include the command field
-        productUpdate.put("id", productId);
-        productUpdate.put("quantity", newQuantity);
+            HttpURLConnection con = (HttpURLConnection) url.openConnection();
+            con.setRequestMethod("POST");
+            con.setDoOutput(true);
+            con.setRequestProperty("Content-Type", "application/json");
     
-        try (OutputStream os = con.getOutputStream()) {
-            byte[] input = productUpdate.toString().getBytes(StandardCharsets.UTF_8);
-            os.write(input, 0, input.length);
+            JSONObject productUpdate = new JSONObject();
+            productUpdate.put("command", "update"); // Include the command field
+            productUpdate.put("id", productId);
+            productUpdate.put("quantity", newQuantity);
+    
+            try (OutputStream os = con.getOutputStream()) {
+                byte[] input = productUpdate.toString().getBytes(StandardCharsets.UTF_8);
+                os.write(input, 0, input.length);
+            }
+    
+            int responseCode = con.getResponseCode();
+            con.disconnect();
+            return responseCode == HttpURLConnection.HTTP_OK;
+        } catch (Exception e) { // Catch URISyntaxException, IOException, JSONException
+            throw new IOException("Error updating product quantity", e);
         }
-    
-        int responseCode = con.getResponseCode();
-        con.disconnect();
-        return responseCode == HttpURLConnection.HTTP_OK;
     }
     
 

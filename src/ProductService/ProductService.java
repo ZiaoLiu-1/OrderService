@@ -1,8 +1,9 @@
 import com.sun.net.httpserver.HttpServer;
-import com.sun.net.httpserver.Authenticator.Result;
+
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
@@ -60,16 +61,20 @@ public class ProductService {
     public static void main(String[] args) throws IOException {
         // Initialize SQLite Database
         String path = System.getProperty("user.dir");
+        // Convert the string path to a Path object
+        Path currentPath = Paths.get(path);
+        // Get the parent of the current path
+        Path parentPath = currentPath.getParent();
+        path = parentPath.getParent().toString(); 
         ServiceConfig productServiceConfig = readConfig(path + "/config.json", "ProductService");
         if (productServiceConfig == null) {
             System.err.println("Failed to read config for ProductService. Using default settings.");
             productServiceConfig = new ServiceConfig(14000, "127.0.0.1"); // default settings
         }
         int port = productServiceConfig.getPort();
-        initializeDatabase();
         HttpServer server = HttpServer.create(new InetSocketAddress(productServiceConfig.getIp(), port), 0);
         server.setExecutor(Executors.newFixedThreadPool(20)); 
-        server.createContext("/product", new ProductHandler());
+        server.createContext("/product", new ProductHandler(server));
         server.setExecutor(null);
         server.start();
 
@@ -77,43 +82,25 @@ public class ProductService {
     }
     
 
-    private static void initializeDatabase() {
-        String url = getDatabaseUrl();
-        Connection conn = null;
-        try {
-            Class.forName("org.sqlite.JDBC");
-            conn = DriverManager.getConnection(url);
-            Statement stmt = conn.createStatement();
     
-            // Create table if not exists
-            String sql = "CREATE TABLE IF NOT EXISTS products (" +
-                     "id INTEGER PRIMARY KEY, " +
-                     "name TEXT NOT NULL, " +
-                     "description TEXT NOT NULL" +
-                     "price REAL NOT NULL, " +
-                     "quantity INTEGER NOT NULL);";
-    
-            stmt.execute(sql);
-        } catch (ClassNotFoundException | SQLException e) {
-            System.err.println(e.getMessage());
-        } finally {
-            try {
-                if (conn != null) {
-                    conn.close();
-                }
-            } catch (SQLException ex) {
-                System.err.println(ex.getMessage());
-            }
-        }
-    }
     
     private static String getDatabaseUrl() {
-        String userHome = System.getProperty("user.dir");
-        String databasePath = userHome + "/Database/info.db"; // Use File.separator for better cross-platform support
+        String path = System.getProperty("user.dir");
+
+        // Convert the string path to a Path object
+        Path currentPath = Paths.get(path);
+
+        // Get the parent of the current path
+        path = currentPath.getParent().toString();
+        String databasePath = path + "/Database/info.db";
         return "jdbc:sqlite:" + databasePath;
     }
 
     static class ProductHandler implements HttpHandler {
+        HttpServer server;
+        ProductHandler(HttpServer server){
+            this.server = server;
+        }
     @Override
     public void handle(HttpExchange exchange) throws IOException {
 
@@ -130,6 +117,10 @@ public class ProductService {
                         break;
                     case "delete":
                         deleteProduct(exchange, requestJson);
+                        break;
+                    case "shutdown":
+                        System.out.println("Shutting down");
+                        handleShutdownCommand(exchange, server);
                         break;
                     default:
                         sendResponse(exchange, "Invalid command", 400);
@@ -191,6 +182,16 @@ public class ProductService {
             }
         }
     }
+    private static void handleShutdownCommand(HttpExchange exchange, HttpServer server) throws IOException {
+        JSONObject responseJson = new JSONObject();
+        responseJson.put("command", "shutdown");
+    
+        // Send the shutdown command response
+        sendResponse(exchange, responseJson.toString(), 200);
+    
+        // Perform server shutdown operations
+        server.stop(4); // Gracefully stop the server with a delay of 1 second
+    }
 
         private static String getRequestBody(HttpExchange exchange) throws IOException {
             try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
@@ -227,7 +228,7 @@ public class ProductService {
             !json.has("id") || 
             !json.has("description") || json.optString("description").isEmpty() ||
             !json.has("price") || json.optDouble("price", -1.0) < 0 ||
-            !json.has("quantity") || json.optInt("quantity", -1) < 0) {
+            !json.has("quantity") || json.optInt("quantity", -1) < 0 || json.optInt("id") < 0) {
             System.err.println("Missing or invalid fields. Command refused.");
             try {
                 sendResponse(exchange, "Bad Request", 400);
@@ -287,6 +288,7 @@ public class ProductService {
 
     private static void updateProduct(HttpExchange exchange, JSONObject json) {
         String url = getDatabaseUrl();
+        System.out.println("Updating");
     
         // Check for the product ID, price, and quantity fields
         if (!json.has("id")) {
@@ -318,62 +320,73 @@ public class ProductService {
             }
             return;
         }
+        int productId = json.getInt("id");
+        if(productId < 0){
+            try {
+                sendResponse(exchange, "ID can't be negative", 400);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
         
-   
         try (Connection conn = DriverManager.getConnection(url)) {
+            System.out.println("updating database");
             StringBuilder sql = new StringBuilder("UPDATE products SET ");
             List<Object> params = new ArrayList<>();
             boolean needComma = false;
     
-            // Dynamically build the SQL query based on the provided fields
-            if (json.has("name")) {
-                sql.append(needComma ? ", " : "").append("name = ?");
+            if (json.has("name") && !json.optString("name").isEmpty()) {
+                System.out.println(json.get("name").toString());
+                sql.append("name = ?");
                 params.add(json.getString("name"));
                 needComma = true;
             }
-            if (json.has("description")) {
-                sql.append(needComma ? ", " : "").append("description = ?");
+            if (json.has("description") && !json.optString("description").isEmpty()) {
+                if (needComma) sql.append(", ");
+                sql.append("description = ?");
                 params.add(json.getString("description"));
                 needComma = true;
             }
             if (json.has("price")) {
-                sql.append(needComma ? ", " : "").append("price = ?");
+                if (needComma) sql.append(", ");
+                sql.append("price = ?");
                 params.add(json.getDouble("price"));
                 needComma = true;
             }
             if (json.has("quantity")) {
-                sql.append(needComma ? ", " : "").append("quantity = ?");
+                if (needComma) sql.append(", ");
+                sql.append("quantity = ?");
                 params.add(json.getInt("quantity"));
             }
     
             sql.append(" WHERE id = ?");
-            params.add(json.getInt("id"));
-    
             try (PreparedStatement pstmtUpdate = conn.prepareStatement(sql.toString())) {
-                for (int i = 0; i < params.size(); i++) {
-                    pstmtUpdate.setObject(i + 1, params.get(i));
+                int paramIndex = 1;
+                for (Object param : params) {
+                    pstmtUpdate.setObject(paramIndex++, param);
                 }
-                pstmtUpdate.setInt(params.size() + 1, json.getInt("id"));
+                pstmtUpdate.setInt(paramIndex, productId);
     
                 int affectedRows = pstmtUpdate.executeUpdate();
                 if (affectedRows > 0) {
                     try (PreparedStatement pstmtSelect = conn.prepareStatement("SELECT * FROM products WHERE id = ?")) {
-                        pstmtSelect.setInt(1, json.getInt("id"));
+                        pstmtSelect.setInt(1, productId);
                         ResultSet rs = pstmtSelect.executeQuery();
+            
                         if (rs.next()) {
-                            
                             JSONObject responseJson = new JSONObject();
                             responseJson.put("id", rs.getInt("id"));
                             responseJson.put("name", rs.getString("name"));
                             responseJson.put("description", rs.getString("description"));
                             responseJson.put("price", rs.getDouble("price"));
                             responseJson.put("quantity", rs.getInt("quantity"));
-
+            
                             sendResponse(exchange, responseJson.toString(), 200);
                         } else {
                             sendResponse(exchange, "Product not found after update", 500);
                         }
                     }
+                    
                 } else {
                     sendResponse(exchange, "Product not found", 404);
                 }
@@ -393,13 +406,24 @@ public class ProductService {
 
     private static void deleteProduct(HttpExchange exchange, JSONObject json) {
         String url = getDatabaseUrl();
+        if (!json.has("id") || !json.has("name") || !json.has("description") || !json.has("price") || !json.has("quantity")) {
+            System.err.println("Missing required fields. Command refused.");
+            try {
+                sendResponse(exchange, "Bad Request: Missing required fields", 400);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+            return;
+        }
+    
         try (Connection conn = DriverManager.getConnection(url);
              PreparedStatement pstmt = conn.prepareStatement(
-                     "DELETE FROM products WHERE id = ? AND name = ? AND price = ? AND quantity = ?")) {
+                     "DELETE FROM products WHERE id = ? AND name = ? AND description = ? AND price = ? AND quantity = ?")) {
             pstmt.setInt(1, json.getInt("id"));
             pstmt.setString(2, json.getString("name"));
-            pstmt.setDouble(3, json.getDouble("price"));
-            pstmt.setInt(4, json.getInt("quantity"));
+            pstmt.setString(3, json.getString("description"));
+            pstmt.setDouble(4, json.getDouble("price"));
+            pstmt.setInt(5, json.getInt("quantity"));
             
             int affectedRows = pstmt.executeUpdate();
             
