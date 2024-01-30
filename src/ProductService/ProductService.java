@@ -406,7 +406,7 @@ public class ProductService {
 
     private static void deleteProduct(HttpExchange exchange, JSONObject json) {
         String url = getDatabaseUrl();
-        if (!json.has("id") || !json.has("name") || !json.has("description") || !json.has("price") || !json.has("quantity")) {
+        if (!json.has("id") || !json.has("name") || !json.has("price") || !json.has("quantity")) {
             System.err.println("Missing required fields. Command refused.");
             try {
                 sendResponse(exchange, "Bad Request: Missing required fields", 400);
@@ -418,12 +418,11 @@ public class ProductService {
     
         try (Connection conn = DriverManager.getConnection(url);
              PreparedStatement pstmt = conn.prepareStatement(
-                     "DELETE FROM products WHERE id = ? AND name = ? AND description = ? AND price = ? AND quantity = ?")) {
+                     "DELETE FROM products WHERE id = ? AND name = ? AND price = ? AND quantity = ?")) {
             pstmt.setInt(1, json.getInt("id"));
             pstmt.setString(2, json.getString("name"));
-            pstmt.setString(3, json.getString("description"));
-            pstmt.setDouble(4, json.getDouble("price"));
-            pstmt.setInt(5, json.getInt("quantity"));
+            pstmt.setDouble(3, json.getDouble("price"));
+            pstmt.setInt(4, json.getInt("quantity"));
             
             int affectedRows = pstmt.executeUpdate();
             
