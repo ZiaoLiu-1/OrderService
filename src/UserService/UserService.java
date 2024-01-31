@@ -13,13 +13,10 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-
-
 import java.util.concurrent.Executors;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.sql.Statement;
 import org.json.*;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -27,7 +24,9 @@ import java.sql.ResultSet;
 
 public class UserService {
 
-    // Config class to hold the configuration details
+    /**
+     * Class to hold the configuration details for a service
+     */
     static class ServiceConfig {
         int port;
         String ip;
@@ -49,7 +48,14 @@ public class UserService {
         }
     }
 
-    // Method to read and parse the config.json file for a specific service
+
+    /**
+     * Returns a ServiceConfig object containing the configuration details for the specified service.
+     *
+     * @param filePath     Path to the config file
+     * @param serviceName  Name of the service to read the config for
+     * @return             ServiceConfig object containing the configuration details
+     */
     private static ServiceConfig readConfig(String filePath, String serviceName) {
         try {
             String content = new String(Files.readAllBytes(Paths.get(filePath)));
@@ -64,6 +70,13 @@ public class UserService {
         }
     }
 
+
+    /**
+     * This method hashes the given password using SHA-256.
+     * 
+     * @param passwordToHash   The password to hash
+     * @return                 The hashed password using SHA-256
+     */
     private static String hashPassword(String passwordToHash) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -82,6 +95,17 @@ public class UserService {
         }
     }
 
+
+    /**
+     * The main method of the ProductService. It starts the server and listens for requests on the specified port and ip.
+     * 
+     * It reads the config.json file to get the port and ip of the UserService.
+     * 
+     * If the config.json file does not exist or the config for the UserService does not exist, it uses the default settings.
+     * 
+     * @param args
+     * @throws IOException
+     */
     public static void main(String[] args) throws IOException {
         // Initialize SQLite Database
         String path = System.getProperty("user.dir");
@@ -95,19 +119,23 @@ public class UserService {
         ServiceConfig userServiceConfig = readConfig(path + "/config.json", "UserService");
         if (userServiceConfig == null) {
             System.err.println("Failed to read config for UserService. Using default settings.");
-            userServiceConfig = new ServiceConfig(14001, "127.0.0.1"); // default settings
+            userServiceConfig = new ServiceConfig(14001, "127.0.0.1"); 
         }
         int port = userServiceConfig.getPort();
         HttpServer server = HttpServer.create(new InetSocketAddress(userServiceConfig.getIp(), port), 0);
-        server.setExecutor(Executors.newFixedThreadPool(20)); // Adjust the pool size as needed
+        server.setExecutor(Executors.newFixedThreadPool(20)); 
         server.createContext("/user", new UserHandler(server));
-        server.setExecutor(null); // creates a default executor
+        server.setExecutor(null); 
         server.start();
         System.out.println("Server started on port " + port);
     }
 
     
- 
+    /**
+     * Returns the database URL for the SQLite database.
+     * 
+     * @return  The database URL
+     */
     private static String getDatabaseUrl() {
         String path = System.getProperty("user.dir");
 
@@ -120,117 +148,161 @@ public class UserService {
         return "jdbc:sqlite:" + databasePath;
     }
 
+
+    /**
+     * Handler class for the UserService.
+     */
     static class UserHandler implements HttpHandler {
+
         HttpServer server;
-        UserHandler(HttpServer server){
+        UserHandler(HttpServer server) {
             this.server = server;
         }
-        @Override
-            public void handle(HttpExchange exchange) throws IOException {
-                if ("POST".equals(exchange.getRequestMethod())) {
-                    String requestBody = getRequestBody(exchange);
-                    System.out.println("Received POST request with body: " + requestBody);
-                    JSONObject json = new JSONObject(requestBody); // This requires a JSON library
-                    String command = json.optString("command");
-                    System.out.println(command);
-                    switch (command) {
-                        case "create":
-                            createUser(exchange, json);
-                            break;
-                        case "update":
-                            updateUser(exchange, json);
-                            break;
-                        case "delete":
-                            deleteUser(exchange, json);
-                            break;
-                        case "shutdown":
-                            System.out.println("Shutting down");
-                            handleShutdownCommand(exchange, server);
-                            break;
-                        default:
-                            sendResponse(exchange, "Unknown command", 400);
-                            return;
-                    }
-        
-                    String response = "Command processed";
-                    sendResponse(exchange, response, 200);
-                } else if ("GET".equals(exchange.getRequestMethod())) {
-                    String requestURI = exchange.getRequestURI().toString();
-                    String[] uri = requestURI.split("/");
-                    String idStr = "";
-                    try{
-                        idStr = uri[2];
-                    }catch(Exception e){
-                        System.err.println(e.getMessage());
-                        sendResponse(exchange, "Please enter user", 404);
-                        exchange.close();
-                    }
-                    
-                    
-                    int id = Integer.parseInt(idStr); // Parse the string to an integer
-                    String url = getDatabaseUrl();
-                    
-                
-                    try (Connection conn = DriverManager.getConnection(url);
-                         PreparedStatement query = conn.prepareStatement("SELECT * FROM users WHERE id = ?")) {
-                        
-                        query.setInt(1, id); // Set the id as an integer
-                        ResultSet rs = query.executeQuery();
-                
-                        if (rs.next()) {
-                            String name = rs.getString("username");
-                            String email = rs.getString("email");
-                            String password = rs.getString("password");
-                
-                            JSONObject respond = new JSONObject();
-                            respond.put("id", id);
-                            respond.put("username", name);
-                            respond.put("email", email);
-                            respond.put("password", hashPassword(password)); 
-                
-                            sendResponse(exchange, respond.toString(), 200);
 
-                        } else {
-                            // Handle case where no user is found
-                            sendResponse(exchange, "User not found", 404);
-                        }
-                    } catch (SQLException e) {
-                        System.err.println(e.getMessage());
-                        // Send an error response to client
-                        sendResponse(exchange, "Internal Server Error", 500);
-                    }
+        /**
+         * This method handles the following HTTP requests:
+         * 
+         * For a GET request: It returns the user details for the user ID specified at the end of url if this ID exists in the database.
+         * 
+         * For a POST request: It performs different operations based on the command specified in the request body.
+         *    - create: Creates a new user in the database if every required field is provided correctly and the provided user ID does not already exist in the database.
+         *    - update: Updates the information of an existing user in the database if the provided user ID exists in the database.
+         *    - delete: Deletes an existing user from the database if every required field is matched correctly.
+         *    - shutdown: Shuts down the server.
+         * 
+         * @param exchange  The HttpExchange object
+         * @throws IOException
+         */
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("POST".equals(exchange.getRequestMethod())) {
+                String requestBody = getRequestBody(exchange);
+                System.out.println("Received POST request with body: " + requestBody);
+                JSONObject json = new JSONObject(requestBody); // This requires a JSON library
+                String command = json.optString("command");
+                System.out.println(command);
+                switch (command) {
+                    case "create":
+                        createUser(exchange, json);
+                        break;
+                    case "update":
+                        updateUser(exchange, json);
+                        break;
+                    case "delete":
+                        deleteUser(exchange, json);
+                        break;
+                    case "shutdown":
+                        System.out.println("Shutting down");
+                        handleShutdownCommand(exchange, server);
+                        break;
+                    default:
+                        sendResponse(exchange, "Unknown command", 400);
+                        return;
+                }
+    
+                String response = "Command processed";
+                sendResponse(exchange, response, 200);
+            } else if ("GET".equals(exchange.getRequestMethod())) {
+                String requestURI = exchange.getRequestURI().toString();
+                String[] uri = requestURI.split("/");
+                String idStr = "";
+                try{
+                    idStr = uri[2];
+                }catch(Exception e){
+                    System.err.println(e.getMessage());
+                    sendResponse(exchange, "Please enter User ID", 400);
+                    exchange.close();
+                }
                 
-                }else {
-                // Send a 405 Method Not Allowed response for non-POST requests
-                exchange.sendResponseHeaders(405, 0);
-                exchange.close();
+                
+                int id = Integer.parseInt(idStr); // Parse the string to an integer
+                String url = getDatabaseUrl();
+                
+            
+                try (Connection conn = DriverManager.getConnection(url);
+                        PreparedStatement query = conn.prepareStatement("SELECT * FROM users WHERE id = ?")) {
+                    
+                    query.setInt(1, id); // Set the id as an integer
+                    ResultSet rs = query.executeQuery();
+            
+                    if (rs.next()) {
+                        String name = rs.getString("username");
+                        String email = rs.getString("email");
+                        String password = rs.getString("password");
+            
+                        JSONObject respond = new JSONObject();
+                        respond.put("id", id);
+                        respond.put("username", name);
+                        respond.put("email", email);
+                        respond.put("password", hashPassword(password)); 
+            
+                        sendResponse(exchange, respond.toString(), 200);
+
+                    } else {
+                        // Handle case where no user is found
+                        sendResponse(exchange, "User not found", 400);
+                    }
+                } catch (SQLException e) {
+                    System.err.println(e.getMessage());
+                    // Send an error response to client
+                    sendResponse(exchange, "Internal Server Error", 500);
+                }
+            
+            } else {
+            // Send a 405 Method Not Allowed response for non-POST requests
+            exchange.sendResponseHeaders(405, 0);
+            exchange.close();
             }
         }
     }
     
+
+    /**
+     * This method handles the shutdown command. It shuts down the server after a delay of 4 seconds.
+     * 
+     * If successfully shut down, it responds with {"command": "shutdown"} and the status code 200.
+     * 
+     * @param exchange  The HttpExchange object
+     * @param server    The HttpServer object
+     * @throws IOException
+     */
     private static void handleShutdownCommand(HttpExchange exchange, HttpServer server) throws IOException {
         JSONObject responseJson = new JSONObject();
         responseJson.put("command", "shutdown");
-    
-        // Send the shutdown command response
+
         sendResponse(exchange, responseJson.toString(), 200);
     
-        // Perform server shutdown operations
-        server.stop(4); // Gracefully stop the server with a delay of 1 second
+        server.stop(4); 
     }
-        private static String getRequestBody(HttpExchange exchange) throws IOException {
-            try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
-                StringBuilder requestBody = new StringBuilder();
-                String line;
-                while ((line = br.readLine()) != null) {
-                    requestBody.append(line);
-                }
-                return requestBody.toString();
+
+
+    /**
+     * This method reads the request body from the given HttpExchange object and returns it as a string.
+     * 
+     * @param exchange  The HttpExchange object
+     * @return          The request body as a string
+     * @throws IOException
+     */
+    private static String getRequestBody(HttpExchange exchange) throws IOException {
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
+            StringBuilder requestBody = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) {
+                requestBody.append(line);
             }
+            return requestBody.toString();
         }
+    }
 
 
- 
+    /**
+     * This method sends the given response string to the client.
+     * 
+     * @param exchange  The HttpExchange object
+     * @param response  The response string
+     * @param code      The response code
+     * @throws IOException
+     */
     private static void sendResponse(HttpExchange exchange, String response, int code) throws IOException {
         if( code == 200){
         exchange.sendResponseHeaders(200, response.length());
@@ -246,6 +318,15 @@ public class UserService {
     }
 
 
+    /**
+     * This method creates a new user in the database if every required field is provided correctly and 
+     * the provided user ID does not already exist in the database.
+     * 
+     * If successfully created, it responds with the information of the user and status code 200.
+     * 
+     * @param exchange  The HttpExchange object
+     * @param json      The request body as a JSONObject
+     */
     private static void createUser(HttpExchange exchange, JSONObject json) {
         System.out.println("Create");
         String url = getDatabaseUrl();
@@ -310,7 +391,16 @@ public class UserService {
     }
 
 
-
+    /**
+     * This method updates the information of an user if the provided user ID does exist in the database.
+     * 
+     * Notice that not all of the fields are required. This method will only update the ones that are provided.
+     * 
+     * If successfully updated, it responds with the information of the user and status code 200.
+     * 
+     * @param exchange  The HttpExchange object
+     * @param json      The request body as a JSONObject
+     */
     private static void updateUser(HttpExchange exchange, JSONObject json) {
         String url = getDatabaseUrl();
     
@@ -362,7 +452,7 @@ public class UserService {
     
                 if (affectedRows == 0) {
                     System.err.println("User ID does not exist. No update performed.");
-                    sendResponse(exchange, "User ID does not exist", 404);
+                    sendResponse(exchange, "User ID does not exist", 400);
                     return;
                 }
             }
@@ -399,7 +489,14 @@ public class UserService {
 
 
 
-
+    /**
+     * This method deletes an user in the database if every required field is matched correctly.
+     * 
+     * It only responds with the correct status code.
+     * 
+     * @param exchange  The HttpExchange object
+     * @param json      The request body as a JSONObject
+     */
     private static void deleteUser(HttpExchange exchange, JSONObject json) {
         String url = getDatabaseUrl();
         if (!json.has("id") || !json.has("username") || !json.has("email") || !json.has("password")) {

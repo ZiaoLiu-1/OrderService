@@ -1,5 +1,4 @@
 import com.sun.net.httpserver.HttpServer;
-
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
 import java.nio.file.Files;
@@ -17,14 +16,16 @@ import java.util.concurrent.Executors;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
-import java.sql.Statement;
 import org.json.*;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 
 
-
 public class ProductService {
+
+    /**
+     * Class to hold the configuration details for a service
+     */
     static class ServiceConfig {
         int port;
         String ip;
@@ -44,6 +45,14 @@ public class ProductService {
         }
     }
 
+
+    /**
+     * Returns a ServiceConfig object containing the configuration details for the specified service.
+     *
+     * @param filePath     Path to the config file
+     * @param serviceName  Name of the service to read the config for
+     * @return             ServiceConfig object containing the configuration details
+     */
     private static ServiceConfig readConfig(String filePath, String serviceName) {
         try {
             String content = new String(Files.readAllBytes(Paths.get(filePath)));
@@ -58,18 +67,31 @@ public class ProductService {
         }
     }
 
+
+    /**
+     * The main method of the ProductService. It starts the server and listens for requests on the specified port and ip.
+     * 
+     * It reads the config.json file to get the port and ip of the ProductService.
+     * 
+     * If the config.json file does not exist or the config for the ProductService does not exist, it uses the default settings.
+     * 
+     * @param args
+     * @throws IOException
+     */
     public static void main(String[] args) throws IOException {
         // Initialize SQLite Database
         String path = System.getProperty("user.dir");
+
         // Convert the string path to a Path object
         Path currentPath = Paths.get(path);
+
         // Get the parent of the current path
         Path parentPath = currentPath.getParent();
         path = parentPath.getParent().toString(); 
         ServiceConfig productServiceConfig = readConfig(path + "/config.json", "ProductService");
         if (productServiceConfig == null) {
             System.err.println("Failed to read config for ProductService. Using default settings.");
-            productServiceConfig = new ServiceConfig(14000, "127.0.0.1"); // default settings
+            productServiceConfig = new ServiceConfig(14000, "127.0.0.1"); 
         }
         int port = productServiceConfig.getPort();
         HttpServer server = HttpServer.create(new InetSocketAddress(productServiceConfig.getIp(), port), 0);
@@ -79,11 +101,14 @@ public class ProductService {
         server.start();
 
         System.out.println("Server started on port " + port);
-    }
-    
+    }  
 
     
-    
+    /**
+     * Returns the database URL for the SQLite database.
+     * 
+     * @return  The database URL
+     */
     private static String getDatabaseUrl() {
         String path = System.getProperty("user.dir");
 
@@ -96,13 +121,33 @@ public class ProductService {
         return "jdbc:sqlite:" + databasePath;
     }
 
+
+    /**
+     * Handler class for the ProductService.
+     */
     static class ProductHandler implements HttpHandler {
+
         HttpServer server;
         ProductHandler(HttpServer server){
             this.server = server;
         }
-    @Override
-    public void handle(HttpExchange exchange) throws IOException {
+
+        /**
+         * This method handles the following HTTP requests:
+         * 
+         * For a GET request: It returns the product details for the product ID specified at the end of url if this ID exists in the database.
+         * 
+         * For a POST request: It performs different operations based on the command specified in the request body.
+         *    - create: Creates a new product in the database if every required field is provided correctly and the provided product ID does not already exist in the database.
+         *    - update: Updates the information of an existing product in the database if the provided product ID exists in the database.
+         *    - delete: Deletes an existing product from the database if every required field is matched correctly.
+         *    - shutdown: Shuts down the server.
+         * 
+         * @param exchange  The HttpExchange object
+         * @throws IOException
+         */
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
 
             if ("POST".equals(exchange.getRequestMethod())) {
                 JSONObject requestJson = new JSONObject(getRequestBody(exchange));
@@ -135,7 +180,7 @@ public class ProductService {
                         idStr = uri[2];
                     }catch(Exception e){
                         System.err.println(e.getMessage());
-                        sendResponse(exchange, "Please enter Product ID", 404);
+                        sendResponse(exchange, "Please enter Product ID", 400);
                         exchange.close();
                     }
                     
@@ -168,7 +213,7 @@ public class ProductService {
                             sendResponse(exchange, respond.toString(), 200);
                         } else {
                             // Handle case where no product is found
-                            sendResponse(exchange, "Product not found", 404);
+                            sendResponse(exchange, "Product not found", 400);
                         }
                     } catch (SQLException e) {
                         System.err.println(e.getMessage());
@@ -182,6 +227,15 @@ public class ProductService {
             }
         }
     }
+
+
+    /**
+     * This method handles the shutdown command by sending a response to the client and then shutting down the server.
+     * 
+     * @param exchange  The HttpExchange object
+     * @param server    The HttpServer object
+     * @throws IOException
+     */
     private static void handleShutdownCommand(HttpExchange exchange, HttpServer server) throws IOException {
         JSONObject responseJson = new JSONObject();
         responseJson.put("command", "shutdown");
@@ -193,19 +247,34 @@ public class ProductService {
         server.stop(4); // Gracefully stop the server with a delay of 1 second
     }
 
-        private static String getRequestBody(HttpExchange exchange) throws IOException {
-            try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
-                StringBuilder requestBody = new StringBuilder();
-                String line;
-                while ((line = br.readLine()) != null) {
-                    requestBody.append(line);
-                }
-                return requestBody.toString();
+
+    /**
+     * This method reads the request body from the given HttpExchange object and returns it as a string.
+     * 
+     * @param exchange  The HttpExchange object
+     * @return          The request body as a string
+     * @throws IOException
+     */
+    private static String getRequestBody(HttpExchange exchange) throws IOException {
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
+            StringBuilder requestBody = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) {
+                requestBody.append(line);
             }
+            return requestBody.toString();
         }
+    }
 
 
- 
+    /**
+     * This method sends the given response string to the client.
+     * 
+     * @param exchange  The HttpExchange object
+     * @param response  The response string
+     * @param code      The response code
+     * @throws IOException
+     */
     private static void sendResponse(HttpExchange exchange, String response, int code) throws IOException {
         if( code == 200){
         exchange.sendResponseHeaders(200, response.length());
@@ -220,6 +289,18 @@ public class ProductService {
         }
     }
 
+
+    /**
+     * This method creates a new product in the database if every required field is provided correctly and 
+     * the provided product ID does not already exist in the database.
+     * 
+     * For the price and quantity fields, they must be non-negative numbers.
+     * 
+     * If successfully created, it responds with the information of the product and status code 200.
+     * 
+     * @param exchange  The HttpExchange object
+     * @param json      The request body as a JSONObject
+     */
     private static void createProduct(HttpExchange exchange, JSONObject json) {
         String url = getDatabaseUrl();
     
@@ -285,7 +366,16 @@ public class ProductService {
     
 
 
-
+    /**
+     * This method updates the information of a product if the provided product ID does exist in the database.
+     * 
+     * Notice that not all of the fields are required. This method will only update the ones that are provided.
+     * 
+     * If successfully updated, it responds with the information of the user and status code 200.
+     * 
+     * @param exchange  The HttpExchange object
+     * @param json      The request body as a JSONObject
+     */
     private static void updateProduct(HttpExchange exchange, JSONObject json) {
         String url = getDatabaseUrl();
         System.out.println("Updating");
@@ -388,7 +478,7 @@ public class ProductService {
                     }
                     
                 } else {
-                    sendResponse(exchange, "Product not found", 404);
+                    sendResponse(exchange, "Product not found", 400);
                 }
             }
         } catch (SQLException e) {
@@ -403,7 +493,16 @@ public class ProductService {
         }
     }
     
-
+    /**
+     * This method deletes a product in the database if every required field is matched correctly.
+     * 
+     * Notice that the description field is not required for matching.
+     * 
+     * It only responds with the correct status code.
+     * 
+     * @param exchange  The HttpExchange object
+     * @param json      The request body as a JSONObject
+     */
     private static void deleteProduct(HttpExchange exchange, JSONObject json) {
         String url = getDatabaseUrl();
         if (!json.has("id") || !json.has("name") || !json.has("price") || !json.has("quantity")) {
@@ -428,9 +527,9 @@ public class ProductService {
             
             if (affectedRows == 0) {
                 System.err.println("No product found or product could not be deleted.");
-                sendResponse(exchange, "", 404); // Not Found status code
+                sendResponse(exchange, "", 400); 
             } else {
-                sendResponse(exchange, "", 200); // OK status code for successful deletion
+                sendResponse(exchange, "", 200); 
             }
             
         } catch (SQLException e) {
@@ -445,5 +544,3 @@ public class ProductService {
         }
     }
 }
-
-    

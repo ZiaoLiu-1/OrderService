@@ -25,7 +25,12 @@ import java.net.URI;
 
 
 public class OrderService {
+
     static boolean isFirstCommandReceived = false;
+
+    /**
+     * Class to hold the configuration details for a service
+     */
     static class ServiceConfig {
         int user_port;
         int product_port;
@@ -43,7 +48,6 @@ public class OrderService {
             this.product_ip = product_ip;
         }
 
-        // Getters
         public int getPort(int service) {
             if(service == 0){
                 return this.user_port;
@@ -67,6 +71,13 @@ public class OrderService {
         }
     }
 
+
+    /**
+     * This method reads the configuration from a JSON file.
+     * 
+     * @param filePath The path to the JSON file
+     * @return A ServiceConfig instance
+     */
     private static ServiceConfig readConfig(String filePath) {
 
         try {
@@ -83,17 +94,13 @@ public class OrderService {
             int productPort = productServiceConfig.getInt("port");
             String productIp = productServiceConfig.getString("ip");
     
-            // Extracting OrderService configuration (if needed)
+            // Extracting OrderService configuration 
             JSONObject orderServiceConfig = json.getJSONObject("OrderService");
             int orderPort = orderServiceConfig.getInt("port");
             String orderIp = orderServiceConfig.getString("ip");
     
-            // Assuming InterServiceCommunication configuration might be used for something else
-            // JSONObject iscConfig = json.getJSONObject("InterServiceCommunication");
-            // int iscPort = iscConfig.getInt("port");
-            // String iscIp = iscConfig.getString("ip");
-    
             return new ServiceConfig(userPort, productPort, orderPort, orderIp, userIp, productIp);
+
         } catch (Exception e) {
             System.err.println("Error reading config: " + e.getMessage());
             return null;
@@ -101,6 +108,16 @@ public class OrderService {
     }
     
 
+    /**
+     * The main method of the OrderService. It starts the server and listens for requests on the specified port and ip.
+     * 
+     * It reads the config.json file to get the port and ip of the OrderService.
+     * 
+     * If the config.json file does not exist or the config for the OrderService does not exist, it uses the default settings.
+     * 
+     * @param args
+     * @throws IOException
+     */
     public static void main(String[] args) throws IOException {
         // Initialize SQLite Database
         String path = System.getProperty("user.dir");
@@ -137,6 +154,11 @@ public class OrderService {
     }
     
     
+    /**
+     * Returns the database URL for the SQLite database.
+     * 
+     * @return  The database URL
+     */
     private static String getDatabaseUrl() {
         String path = System.getProperty("user.dir");
 
@@ -149,16 +171,31 @@ public class OrderService {
         return "jdbc:sqlite:" + databasePath;
     }
 
+
+    /**
+     * Handler class for the OrderService.
+     */
     static class OrderHandler implements HttpHandler {
-        private ServiceConfig config; // Instance variable to hold the configuration
+        private ServiceConfig config; 
         private HttpServer server;
     
-        // Constructor that accepts a ServiceConfig instance
         public OrderHandler(ServiceConfig config, HttpServer server) {
             this.config = config;
             this.server = server;
         }
     
+
+        /**
+         * This method handles the following HTTP requests:
+         * 
+         * For a POST request: It performs different operations based on the command specified in the request body.
+         *    - place order: Creates a new order in the database if every field is provided correctly and value 
+         *      of the quantity field does not exceed the available quantity.
+         *    - shutdown: Shuts down the server.
+         *    - restart: Restarts the server.
+         * @param exchange  The HttpExchange object
+         * @throws IOException
+         */
         @Override
         public void handle(HttpExchange exchange) throws IOException {  
             if ("POST".equals(exchange.getRequestMethod())) {   
@@ -166,11 +203,11 @@ public class OrderService {
                 String command = requestJson.optString("command");  
                 System.out.println(command);
                 if (!isFirstCommandReceived) {
-                    isFirstCommandReceived = true; // Mark the flag as true after receiving the first command
+                    isFirstCommandReceived = true; 
 
                     if (!"restart".equalsIgnoreCase(command)) {
                         // If the first command is not 'restart', drop all tables
-                        System.out.println("First comamnd");
+                        System.out.println("First command");
                         dropAllTables();
                         sendResponse(exchange, "restarted", 200);
                     }
@@ -179,12 +216,12 @@ public class OrderService {
                 switch (command) {  
                     case "place order":  
                         System.out.println("Place Order");
-                        placeOrder(requestJson, this.config, exchange); // Use the instance variable
+                        placeOrder(requestJson, this.config, exchange); 
                         break;  
                     case "shutdown":
-                        System.out.println("SHutting down");
-                        sendShutdownCommand(config.getIp(0), config.getPort(0), "user"); // User service
-                        sendShutdownCommand(config.getIp(1), config.getPort(1), "product"); // Product service
+                        System.out.println("Shutting down");
+                        sendShutdownCommand(config.getIp(0), config.getPort(0), "user"); 
+                        sendShutdownCommand(config.getIp(1), config.getPort(1), "product"); 
                         sendResponse(exchange, "Shutting down", 200);
                         server.stop(4);
                     case "restart":
@@ -196,13 +233,16 @@ public class OrderService {
     
                 sendResponse(exchange, "Success", 200);    
             } else {    
-                // Send a 405 Method Not Allowed response for non-POST requests 
-                exchange.sendResponseHeaders(405, 0);   
+                exchange.sendResponseHeaders(400, 0);   
                 exchange.close();   
             }   
         }   
     }
 
+
+    /**
+     * This method drops all tables in the database and re-initializes them.
+     */
     private static void dropAllTables() {
         System.out.println("Dropping all tables...");
         String url = getDatabaseUrl();
@@ -220,6 +260,12 @@ public class OrderService {
         }
     }
     
+
+    /**
+     * This method initializes the tables in the database.
+     * 
+     * @param conn  The connection to the database
+     */
     private static void initTables(Connection conn) {
         try (Statement stmt = conn.createStatement()) {
             // Fixed SQL statement with the added comma
@@ -251,6 +297,13 @@ public class OrderService {
     }
     
     
+    /**
+     * This method sends the shutdown command to a specified service.
+     * 
+     * @param ip        The IP address of the service
+     * @param port      The port of the service
+     * @param service   The name of the service
+     */
     private static void sendShutdownCommand(String ip, int port, String service) {
         try {
             URL url = new URL("http://" + ip + ":" + port + "/" + service);
@@ -276,49 +329,62 @@ public class OrderService {
         }
     }
     
+
+    /**
+     * Handler class for the UserService.
+     */
     static class UserHandler implements HttpHandler {
-    private ServiceConfig config;
+        private ServiceConfig config;
 
-    public UserHandler(ServiceConfig config) {
-        this.config = config;
-    }
+        public UserHandler(ServiceConfig config) {
+            this.config = config;
+        }
 
-    @Override
-    public void handle(HttpExchange exchange) throws IOException {
-        String requestBody = getRequestBody(exchange); // Read the request body once at the beginning
-        JSONObject requestJson = new JSONObject(requestBody); // Parse the requestBody to JSON
-        String command = requestJson.optString("command");
+        /**
+         * This method handles the HTTP requests for the UserService. It will forward the request to the UserService.
+         */
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            String requestBody = getRequestBody(exchange); 
+            JSONObject requestJson = new JSONObject(requestBody); 
+            String command = requestJson.optString("command");
 
-        if (!isFirstCommandReceived) {
-            isFirstCommandReceived = true;
+            if (!isFirstCommandReceived) {
+                isFirstCommandReceived = true;
 
-            if (!"restart".equalsIgnoreCase(command)) {
-                dropAllTables();
+                if (!"restart".equalsIgnoreCase(command)) {
+                    dropAllTables();
+                }
+            }
+
+            try {
+                URI uri = new URI("http", null, config.getIp(0), config.getPort(0), exchange.getRequestURI().getPath(), null, null);
+                URL url = uri.toURL();
+                forwardRequest(exchange, url, requestBody);
+            } catch (Exception e) {
+                System.err.println(e.getMessage());
             }
         }
-
-        try {
-            URI uri = new URI("http", null, config.getIp(0), config.getPort(0), exchange.getRequestURI().getPath(), null, null);
-            URL url = uri.toURL();
-            forwardRequest(exchange, url, requestBody); // Pass requestBody as an argument
-        } catch (Exception e) {
-            System.err.println(e.getMessage());
-        }
     }
-}
 
     
+    /**
+     * Handler class for the ProductService.
+     */
     static class ProductHandler implements HttpHandler {
         private ServiceConfig config;
     
         public ProductHandler(ServiceConfig config) {
             this.config = config;
         }
-    
+        
+        /**
+         * This method handles the HTTP requests for the ProductService. It will forward the request to the ProductService.
+         */
         @Override
         public void handle(HttpExchange exchange) throws IOException {
-            String requestBody = getRequestBody(exchange); // Read the request body once at the beginning
-            JSONObject requestJson = new JSONObject(requestBody); // Parse the requestBody to JSON
+            String requestBody = getRequestBody(exchange); 
+            JSONObject requestJson = new JSONObject(requestBody); 
             String command = requestJson.optString("command");
     
             if (!isFirstCommandReceived) {
@@ -332,7 +398,7 @@ public class OrderService {
             try {
                 URI uri = new URI("http", null, config.getIp(1), config.getPort(1), exchange.getRequestURI().getPath(), null, null);
                 URL url = uri.toURL();
-                forwardRequest(exchange, url, requestBody); // Pass requestBody as an argument
+                forwardRequest(exchange, url, requestBody);
             } catch (Exception e) {
                 System.err.println(e.getMessage());
             }
@@ -340,6 +406,14 @@ public class OrderService {
     }
     
 
+    /**
+     * This method forwards the HTTP request to the specified URL.
+     * 
+     * @param exchange      The HttpExchange object
+     * @param url           The URL to forward the request to
+     * @param requestBody   The request body
+     * @throws IOException
+     */
     private static void forwardRequest(HttpExchange exchange, URL url, String requestBody) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         connection.setRequestMethod(exchange.getRequestMethod());
@@ -380,22 +454,33 @@ public class OrderService {
     }
     
     
-    
-    
-
-        private static String getRequestBody(HttpExchange exchange) throws IOException {
-            try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
-                StringBuilder requestBody = new StringBuilder();
-                String line;
-                while ((line = br.readLine()) != null) {
-                    requestBody.append(line);
-                }
-                return requestBody.toString();
+    /**
+     * This method reads the request body from the given HttpExchange object and returns it as a string.
+     * 
+     * @param exchange  The HttpExchange object
+     * @return          The request body as a string
+     * @throws IOException
+     */
+    private static String getRequestBody(HttpExchange exchange) throws IOException {
+        try (BufferedReader br = new BufferedReader(new InputStreamReader(exchange.getRequestBody(), StandardCharsets.UTF_8))) {
+            StringBuilder requestBody = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) {
+                requestBody.append(line);
             }
+            return requestBody.toString();
         }
+    }
 
 
- 
+    /**
+     * This method sends the given response string to the client.
+     * 
+     * @param exchange  The HttpExchange object
+     * @param response  The response string
+     * @param code      The response code
+     * @throws IOException
+     */
     private static void sendResponse(HttpExchange exchange, String response, int code) throws IOException {
         if( code == 200){
         exchange.sendResponseHeaders(200, response.length());
@@ -411,6 +496,17 @@ public class OrderService {
     }
 
 
+    /**
+     * This method creates a new order in the database if every required field is provided correctly.
+     * 
+     * For the product ID and user ID, they must exist in the database.
+     * For the quantity, it must not exceed the available quantity of the product.
+     * 
+     * No matter the order is created successfully or not, it will response with the information of the order and the corresponding status code.
+     * 
+     * @param exchange  The HttpExchange object
+     * @param json      The request body as a JSONObject
+     */
     private static void placeOrder(JSONObject json, ServiceConfig config, HttpExchange exchange) {
         try {
             if (!json.has("product_id") || !json.has("quantity")) {
@@ -479,7 +575,7 @@ public class OrderService {
             pstmt.setInt(1, json.getInt("product_id"));
             pstmt.setInt(2, json.getInt("user_id"));
             pstmt.setInt(3, json.getInt("quantity"));
-            pstmt.setString(4, status); // Assuming the order is successful at this point
+            pstmt.setString(4, status); 
             System.out.println(pstmt);
             // Execute the insert statement
             int affectedRows = pstmt.executeUpdate();
@@ -497,7 +593,7 @@ public class OrderService {
                     responseJson.put("product_id", json.getInt("product_id"));
                     responseJson.put("user_id", json.getInt("user_id"));
                     responseJson.put("quantity", json.getInt("quantity"));
-                    responseJson.put("status", "Success");
+                    responseJson.put("status", status);
                 } else {
                     throw new SQLException("Creating order failed, no ID obtained.");
                 }
@@ -506,8 +602,6 @@ public class OrderService {
             System.err.println("SQLException: " + e.getMessage());
         }
     }
-    
-
     
     
     private static boolean checkEntityExistence(String ip, int port, String endpoint, int entityId) throws IOException {
@@ -526,6 +620,7 @@ public class OrderService {
         }
     }
     
+
     private static int getProductQuantity(String ip, int port, int productId) throws IOException {
         try {
             URI uri = new URI("http", null, ip, port, "/product/" + productId, null, null);
@@ -556,6 +651,7 @@ public class OrderService {
         }
     }
     
+    
     private static boolean updateProductQuantity(String ip, int port, int productId, int newQuantity) throws IOException {
         try {
             URI uri = new URI("http", null, ip, port, "/product/" + productId, null, null);
@@ -583,9 +679,6 @@ public class OrderService {
             throw new IOException("Error updating product quantity", e);
         }
     }
-    
-
-    
     
 }
 
